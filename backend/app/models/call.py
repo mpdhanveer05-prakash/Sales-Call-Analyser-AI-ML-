@@ -13,6 +13,9 @@ from app.database import Base
 if TYPE_CHECKING:
     from app.models.agent import Agent
     from app.models.user import User
+    from app.models.transcript import Transcript
+    from app.models.scores import SpeechScore, SalesScore
+    from app.models.summary import Summary
 
 
 class CallStatus(str, enum.Enum):
@@ -47,3 +50,7 @@ class Call(Base):
 
     agent: Mapped["Agent"] = relationship("Agent", back_populates="calls")
     uploader: Mapped["User"] = relationship("User", foreign_keys=[uploaded_by])
+    transcript: Mapped[Optional["Transcript"]] = relationship("Transcript", back_populates="call", uselist=False)
+    speech_score: Mapped[Optional["SpeechScore"]] = relationship("SpeechScore", back_populates="call", uselist=False)
+    sales_score: Mapped[Optional["SalesScore"]] = relationship("SalesScore", back_populates="call", uselist=False)
+    summary: Mapped[Optional["Summary"]] = relationship("Summary", back_populates="call", uselist=False)

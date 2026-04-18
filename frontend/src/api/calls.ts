@@ -1,5 +1,5 @@
 import apiClient from "./client";
-import type { Call, PaginatedResponse } from "@/types";
+import type { Call, PaginatedResponse, Transcript, CallScores } from "@/types";
 
 export interface CallFilters {
   page?: number;
@@ -25,5 +25,20 @@ export async function uploadCall(formData: FormData): Promise<{ id: string; stat
   const { data } = await apiClient.post("/calls/upload", formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });
+  return data;
+}
+
+export async function fetchTranscript(callId: string): Promise<Transcript> {
+  const { data } = await apiClient.get<Transcript>(`/calls/${callId}/transcript`);
+  return data;
+}
+
+export async function fetchAudioUrl(callId: string): Promise<string> {
+  const { data } = await apiClient.get<{ url: string }>(`/calls/${callId}/audio-url`);
+  return data.url;
+}
+
+export async function fetchScores(callId: string): Promise<CallScores> {
+  const { data } = await apiClient.get<CallScores>(`/calls/${callId}/scores`);
   return data;
 }

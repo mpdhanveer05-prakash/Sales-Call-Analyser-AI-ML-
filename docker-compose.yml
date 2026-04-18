@@ -82,7 +82,7 @@ services:
     restart: unless-stopped
 
   languagetool:
-    image: erikvl87/languagetool:latest
+    image: silviof/docker-languagetool:latest
     container_name: sca-languagetool
     ports:
       - "8010:8010"
@@ -162,6 +162,26 @@ services:
       - "8001:8001"
     env_file:
       - .env
+    environment:
+      # MinIO connection (Docker network — use service name not localhost)
+      MINIO_ENDPOINT: minio:9000
+      MINIO_SECURE: "false"
+      # Whisper model settings — change to large-v3 once GPU is confirmed
+      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-base}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      MODEL_CACHE_DIR: /app/model_cache
+      # Optional: set HUGGINGFACE_TOKEN in .env to enable Pyannote diarization
+      HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN:-}
+      # LanguageTool — used by speech analysis for grammar scoring
+      LANGUAGETOOL_URL: http://languagetool:8010
+    volumes:
+      - ml_models:/app/model_cache
+    depends_on:
+      minio:
+        condition: service_healthy
+      languagetool:
+        condition: service_healthy
     restart: unless-stopped
     profiles:
       - app
@@ -187,6 +207,7 @@ volumes:
   minio_data:
   opensearch_data:
   ollama_data:
+  ml_models:      # Whisper model cache — avoids re-download on container restart
 
 networks:
   default:

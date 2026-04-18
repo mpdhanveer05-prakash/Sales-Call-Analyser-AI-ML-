@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 
 from app.database import get_db
 from app.dependencies import CurrentUser
@@ -14,6 +14,12 @@ from app.models.call import Call, CallStatus
 from app.models.agent import Agent
 from app.models.user import User, UserRole
 from app.schemas.call import CallListResponse, CallOut, CallUploadResponse
+from app.schemas.transcript import TranscriptOut, TranscriptSegmentOut
+from app.schemas.scores import CallScoresOut, SpeechScoreOut, SalesScoreOut
+from app.schemas.summary import SummaryOut
+from app.models.transcript import Transcript
+from app.models.scores import SpeechScore, SalesScore
+from app.models.summary import Summary
 from app.services import storage_service
 from app.config import settings
 
@@ -209,4 +215,200 @@ async def get_call(
         sales_score=float(call.sales_score) if call.sales_score else None,
         original_filename=call.original_filename,
         uploaded_at=call.uploaded_at,
+    )
+
+
+@router.get("/{call_id}/transcript", response_model=TranscriptOut)
+async def get_call_transcript(
+    call_id: UUID,
+    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    db: AsyncSession = Depends(get_db),
+) -> TranscriptOut:
+    # Verify call access (reuse RBAC logic)
+    call_result = await db.execute(
+        select(Call).options(selectinload(Call.agent)).where(Call.id == call_id)
+    )
+    call = call_result.scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+
+    if current_user.role == UserRole.AGENT:
+        agent_result = await db.execute(select(Agent).where(Agent.user_id == current_user.id))
+        own_agent = agent_result.scalar_one_or_none()
+        if not own_agent or call.agent_id != own_agent.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    elif current_user.role == UserRole.MANAGER and current_user.team_id:
+        if call.agent.team_id != current_user.team_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    transcript_result = await db.execute(
+        select(Transcript)
+        .options(joinedload(Transcript.segments))
+        .where(Transcript.call_id == call_id)
+    )
+    transcript = transcript_result.unique().scalar_one_or_none()
+    if transcript is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Transcript not yet available — call may still be processing",
+        )
+
+    return TranscriptOut(
+        id=transcript.id,
+        call_id=transcript.call_id,
+        language=transcript.language,
+        duration_seconds=float(transcript.duration_seconds) if transcript.duration_seconds else None,
+        segment_count=transcript.segment_count,
+        segments=[
+            TranscriptSegmentOut(
+                id=s.id,
+                speaker=s.speaker,
+                start_ms=s.start_ms,
+                end_ms=s.end_ms,
+                text=s.text,
+                confidence=float(s.confidence) if s.confidence else None,
+            )
+            for s in transcript.segments
+        ],
+        created_at=transcript.created_at,
+    )
+
+
+@router.get("/{call_id}/audio-url")
+async def get_call_audio_url(
+    call_id: UUID,
+    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    call_result = await db.execute(
+        select(Call).options(selectinload(Call.agent)).where(Call.id == call_id)
+    )
+    call = call_result.scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+
+    if current_user.role == UserRole.AGENT:
+        agent_result = await db.execute(select(Agent).where(Agent.user_id == current_user.id))
+        own_agent = agent_result.scalar_one_or_none()
+        if not own_agent or call.agent_id != own_agent.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    elif current_user.role == UserRole.MANAGER and current_user.team_id:
+        if call.agent.team_id != current_user.team_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    url = storage_service.get_presigned_url(call.audio_url, expires_hours=2)
+    return {"url": url}
+
+
+@router.get("/{call_id}/scores", response_model=CallScoresOut)
+async def get_call_scores(
+    call_id: UUID,
+    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    db: AsyncSession = Depends(get_db),
+) -> CallScoresOut:
+    call_result = await db.execute(
+        select(Call).options(selectinload(Call.agent)).where(Call.id == call_id)
+    )
+    call = call_result.scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+
+    if current_user.role == UserRole.AGENT:
+        agent_result = await db.execute(select(Agent).where(Agent.user_id == current_user.id))
+        own_agent = agent_result.scalar_one_or_none()
+        if not own_agent or call.agent_id != own_agent.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    elif current_user.role == UserRole.MANAGER and current_user.team_id:
+        if call.agent.team_id != current_user.team_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    score_result = await db.execute(
+        select(SpeechScore).where(SpeechScore.call_id == call_id)
+    )
+    speech = score_result.scalar_one_or_none()
+
+    speech_out: SpeechScoreOut | None = None
+    if speech:
+        speech_out = SpeechScoreOut(
+            id=speech.id,
+            call_id=speech.call_id,
+            pronunciation=float(speech.pronunciation),
+            intonation=float(speech.intonation),
+            fluency=float(speech.fluency),
+            grammar=float(speech.grammar),
+            vocabulary=float(speech.vocabulary),
+            pace=float(speech.pace),
+            clarity=float(speech.clarity),
+            filler_score=float(speech.filler_score),
+            composite=float(speech.composite),
+            fillers_per_min=float(speech.fillers_per_min) if speech.fillers_per_min else None,
+            pace_wpm=float(speech.pace_wpm) if speech.pace_wpm else None,
+            talk_ratio=float(speech.talk_ratio) if speech.talk_ratio else None,
+            created_at=speech.created_at,
+        )
+
+    # Sales score
+    sales_result = await db.execute(select(SalesScore).where(SalesScore.call_id == call_id))
+    sales = sales_result.scalar_one_or_none()
+
+    sales_out: SalesScoreOut | None = None
+    if sales:
+        sales_out = SalesScoreOut(
+            id=sales.id,
+            call_id=sales.call_id,
+            greeting=float(sales.greeting),
+            rapport=float(sales.rapport),
+            discovery=float(sales.discovery),
+            value_explanation=float(sales.value_explanation),
+            objection_handling=float(sales.objection_handling),
+            script_adherence=float(sales.script_adherence),
+            closing=float(sales.closing),
+            compliance=float(sales.compliance),
+            composite=float(sales.composite),
+            details=sales.details,
+            created_at=sales.created_at,
+        )
+
+    return CallScoresOut(call_id=call_id, speech=speech_out, sales=sales_out)
+
+
+@router.get("/{call_id}/summary", response_model=SummaryOut)
+async def get_call_summary(
+    call_id: UUID,
+    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    db: AsyncSession = Depends(get_db),
+) -> SummaryOut:
+    call_result = await db.execute(
+        select(Call).options(selectinload(Call.agent)).where(Call.id == call_id)
+    )
+    call = call_result.scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+
+    if current_user.role == UserRole.AGENT:
+        agent_result = await db.execute(select(Agent).where(Agent.user_id == current_user.id))
+        own_agent = agent_result.scalar_one_or_none()
+        if not own_agent or call.agent_id != own_agent.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    elif current_user.role == UserRole.MANAGER and current_user.team_id:
+        if call.agent.team_id != current_user.team_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    summary_result = await db.execute(select(Summary).where(Summary.call_id == call_id))
+    summary = summary_result.scalar_one_or_none()
+    if summary is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Summary not yet available — call may still be processing",
+        )
+
+    return SummaryOut(
+        id=summary.id,
+        call_id=summary.call_id,
+        executive_summary=summary.executive_summary,
+        key_moments=summary.key_moments or [],
+        coaching_suggestions=summary.coaching_suggestions or [],
+        disposition_confidence=float(summary.disposition_confidence) if summary.disposition_confidence else None,
+        disposition_reasoning=summary.disposition_reasoning,
+        created_at=summary.created_at,
     )

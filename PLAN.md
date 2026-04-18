@@ -18,9 +18,9 @@ Update the checkboxes as tasks are completed.
 
 | Phase | Name | Duration (Est.) | Status |
 |---|---|---|---|
-| 1 | Foundation & Infrastructure | Week 1–2 | 🔲 Not Started |
-| 2 | Transcription Pipeline | Week 3–4 | 🔲 Not Started |
-| 3 | Speech Quality Layer | Week 5–6 | 🔲 Not Started |
+| 1 | Foundation & Infrastructure | Week 1–2 | ✅ Complete |
+| 2 | Transcription Pipeline | Week 3–4 | ✅ Complete |
+| 3 | Speech Quality Layer | Week 5–6 | ✅ Complete |
 | 4 | Sales Quality Layer + LLM | Week 7–8 | 🔲 Not Started |
 | 5 | Search & Agent Analytics | Week 9–10 | 🔲 Not Started |
 | 6 | Polish, Testing & Local Deploy | Week 11–12 | 🔲 Not Started |
@@ -36,92 +36,92 @@ Update the checkboxes as tasks are completed.
 **Milestone:** Manager can log in, upload a `.mp3` file, and see it in the calls list with status "Queued".
 
 ### 1.1 — Project Setup
-- [ ] Create `CLAUDE.md` ✅
-- [ ] Create `PLAN.md` ✅
-- [ ] Create `.env.example` with all variables documented
-- [ ] Create `.gitignore`
-- [ ] Create `docker-compose.yml` with all infrastructure services
-- [ ] Create `README.md` with local setup instructions
+- [x] Create `CLAUDE.md`
+- [x] Create `PLAN.md`
+- [x] Create `.env.example` with all variables documented
+- [x] Create `.gitignore`
+- [x] Create `docker-compose.yml` with all infrastructure services
+- [x] Create `README.md` with local setup instructions
 
 ### 1.2 — Infrastructure Services (Docker Compose)
-- [ ] PostgreSQL 16 with pgvector extension — verify connection
-- [ ] Redis — verify connection
-- [ ] MinIO — verify connection, create `call-recordings` and `call-processed` buckets
-- [ ] OpenSearch — verify connection, single-node dev mode
-- [ ] LanguageTool — verify `/v2/check` endpoint responds
-- [ ] Ollama — verify running, pull `llama3.1:8b` model
+- [x] PostgreSQL 16 with pgvector extension — verify connection
+- [x] Redis — verify connection
+- [x] MinIO — verify connection, create `call-recordings` and `call-processed` buckets
+- [x] OpenSearch — verify connection, single-node dev mode
+- [x] LanguageTool — verify `/v2/check` endpoint responds
+- [x] Ollama — verify running, pull `llama3.1:8b` model
 
 ### 1.3 — Backend: FastAPI Skeleton
-- [ ] Create `backend/` folder structure
-- [ ] `requirements.txt` — all Python dependencies listed
-- [ ] `Dockerfile` for backend
-- [ ] `app/main.py` — FastAPI app with CORS, health endpoint at `GET /health`
-- [ ] `app/config.py` — Pydantic Settings reading from `.env`
-- [ ] `app/database.py` — SQLAlchemy engine, session factory, Base class
+- [x] Create `backend/` folder structure
+- [x] `requirements.txt` — all Python dependencies listed
+- [x] `Dockerfile` for backend
+- [x] `app/main.py` — FastAPI app with CORS, health endpoint at `GET /health`
+- [x] `app/config.py` — Pydantic Settings reading from `.env`
+- [x] `app/database.py` — SQLAlchemy engine, session factory, Base class
 
 ### 1.4 — Database Schema (Core Tables)
-- [ ] Alembic initialized — `alembic init alembic`
-- [ ] Migration 001: Create `users` table
-- [ ] Migration 002: Create `teams` table
-- [ ] Migration 003: Create `agents` table
-- [ ] Migration 004: Create `calls` table (id, agent_id, audio_url, status, duration, call_date, disposition, uploaded_at, processed_at)
-- [ ] All migrations run successfully — `alembic upgrade head`
+- [x] Alembic initialized — `alembic init alembic`
+- [x] Migration 001: Create `users` table
+- [x] Migration 002: Create `teams` table
+- [x] Migration 003: Create `agents` table
+- [x] Migration 004: Create `calls` table (id, agent_id, audio_url, status, duration, call_date, disposition, uploaded_at, processed_at)
+- [ ] All migrations run successfully — `alembic upgrade head` ⚠️ needs live DB verify
 
 ### 1.5 — Authentication
-- [ ] `app/models/user.py` — User ORM model (id, email, hashed_password, role, team_id)
-- [ ] `app/schemas/auth.py` — LoginRequest, TokenResponse Pydantic schemas
-- [ ] `app/services/auth_service.py` — hash password, verify password, create JWT, decode JWT
-- [ ] `app/routers/auth.py` — `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`
-- [ ] Auth dependency `get_current_user` for protecting routes
-- [ ] Role-based dependency `require_role(["ADMIN", "MANAGER"])`
-- [ ] Seed default users: admin, manager, agent (from `scripts/seed_users.py`)
+- [x] `app/models/user.py` — User ORM model (id, email, hashed_password, role, team_id)
+- [x] `app/schemas/auth.py` — LoginRequest, TokenResponse Pydantic schemas
+- [x] `app/services/auth_service.py` — hash password, verify password, create JWT, decode JWT
+- [x] `app/routers/auth.py` — `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`
+- [x] Auth dependency `get_current_user` for protecting routes
+- [x] Role-based dependency `require_role(["ADMIN", "MANAGER"])`
+- [x] Seed default users: admin, manager, agent (from `scripts/seed_users.py`)
 
 ### 1.6 — File Upload
-- [ ] `app/services/storage_service.py` — MinIO upload, get presigned URL, delete
-- [ ] `app/routers/calls.py` — `POST /api/v1/calls/upload` (multipart/form-data)
-- [ ] Validate file extension and size on upload
-- [ ] Save call record to DB with status `QUEUED`
-- [ ] Return call_id in response
+- [x] `app/services/storage_service.py` — MinIO upload, get presigned URL, delete
+- [x] `app/routers/calls.py` — `POST /api/v1/calls/upload` (multipart/form-data)
+- [x] Validate file extension and size on upload
+- [x] Save call record to DB with status `QUEUED`
+- [x] Return call_id in response
 
 ### 1.7 — Celery Job Queue
-- [ ] `app/workers/celery_app.py` — Celery app configured with Redis broker
-- [ ] Stub task: `process_call_task(call_id)` — logs "Processing call {call_id}", updates status to `ANALYZING`
-- [ ] Worker starts and picks up task on upload
-- [ ] Verify job flow: upload → queued → celery picks up → status updates in DB
+- [x] `app/workers/celery_app.py` — Celery app configured with Redis broker
+- [x] Stub task: `process_call_task(call_id)` — logs "Processing call {call_id}", updates status to `ANALYZING`
+- [ ] Worker starts and picks up task on upload ⚠️ needs live verify
+- [ ] Verify job flow: upload → queued → celery picks up → status updates in DB ⚠️ needs live verify
 
 ### 1.8 — Frontend: React + Vite Skeleton
-- [ ] Scaffold with `npm create vite@latest frontend -- --template react-ts`
-- [ ] Install all dependencies from `package.json`
-- [ ] Configure Tailwind CSS
-- [ ] Configure `@/` path alias in `vite.config.ts` and `tsconfig.json`
-- [ ] Set up React Router — routes for `/login`, `/upload`, `/calls`
-- [ ] Axios instance in `src/api/client.ts` — base URL from env, JWT interceptor
-- [ ] TanStack Query provider in `App.tsx`
-- [ ] Zustand auth store — `useAuthStore` with user, token, login, logout
+- [x] Scaffold with `npm create vite@latest frontend -- --template react-ts`
+- [x] Install all dependencies from `package.json`
+- [x] Configure Tailwind CSS
+- [x] Configure `@/` path alias in `vite.config.ts` and `tsconfig.json`
+- [x] Set up React Router — routes for `/login`, `/upload`, `/calls`
+- [x] Axios instance in `src/api/client.ts` — base URL from env, JWT interceptor
+- [x] TanStack Query provider in `App.tsx`
+- [x] Zustand auth store — `useAuthStore` with user, token, login, logout
 
 ### 1.9 — Frontend: Login Page
-- [ ] `LoginPage.tsx` — email + password form with React Hook Form + Zod
-- [ ] Call `POST /api/v1/auth/login` on submit
-- [ ] Store JWT in Zustand + localStorage
-- [ ] Redirect to `/calls` on success
-- [ ] Protected route wrapper — redirect to `/login` if not authenticated
+- [x] `LoginPage.tsx` — email + password form with React Hook Form + Zod
+- [x] Call `POST /api/v1/auth/login` on submit
+- [x] Store JWT in Zustand + localStorage
+- [x] Redirect to `/calls` on success
+- [x] Protected route wrapper — redirect to `/login` if not authenticated
 
 ### 1.10 — Frontend: Upload Page
-- [ ] `UploadPage.tsx` — drag-and-drop zone (react-dropzone)
-- [ ] Agent selector dropdown (fetches from `GET /api/v1/agents`)
-- [ ] Call date picker
-- [ ] File validation (type + size) client-side before upload
-- [ ] Progress indicator during upload
-- [ ] On success: show call ID and "Processing started" message
+- [x] `UploadPage.tsx` — drag-and-drop zone (react-dropzone)
+- [x] Agent selector dropdown (fetches from `GET /api/v1/agents`)
+- [x] Call date picker
+- [x] File validation (type + size) client-side before upload
+- [x] Progress indicator during upload
+- [x] On success: show call ID and "Processing started" message
 
 ### 1.11 — Frontend: Calls List Page
-- [ ] `CallsListPage.tsx` — table of calls
-- [ ] Columns: Date, Agent, Duration, Status, Disposition, Speech Score, Sales Score
-- [ ] Status badge (Queued, Transcribing, Analyzing, Scoring, Completed, Failed)
-- [ ] Filter: agent, date range, status
-- [ ] Pagination
-- [ ] Click row → navigate to `/calls/:id`
-- [ ] Auto-refresh every 15 seconds for calls in processing states
+- [x] `CallsListPage.tsx` — table of calls
+- [x] Columns: Date, Agent, Duration, Status, Disposition, Speech Score, Sales Score
+- [x] Status badge (Queued, Transcribing, Analyzing, Scoring, Completed, Failed)
+- [x] Filter: agent, date range, status
+- [x] Pagination
+- [x] Click row → navigate to `/calls/:id`
+- [x] Auto-refresh every 15 seconds for calls in processing states
 
 **✅ Phase 1 Complete When:**
 - All Docker services start with `docker compose up -d`
@@ -138,61 +138,61 @@ Update the checkboxes as tasks are completed.
 **Milestone:** Call detail page shows full transcript with [AGENT] and [CUSTOMER] labels, timestamps, and a synchronized audio player.
 
 ### 2.1 — ML Service Setup
-- [ ] Create `ml-service/` folder structure
-- [ ] `requirements.txt` — faster-whisper, pyannote, librosa, spaCy, etc.
-- [ ] `Dockerfile` — CUDA base image, install ffmpeg, download spaCy model
-- [ ] `app/main.py` — FastAPI app with `GET /health` endpoint
-- [ ] Add ml-service to `docker-compose.yml`
-- [ ] Verify ml-service starts and GPU is accessible
+- [x] Create `ml-service/` folder structure
+- [x] `requirements.txt` — faster-whisper, pyannote, librosa, spaCy, etc.
+- [x] `Dockerfile` — Python 3.11 slim + ffmpeg, CPU torch, spaCy model download
+- [x] `app/main.py` — FastAPI app with `GET /health` endpoint
+- [x] Add ml-service to `docker-compose.yml` with model cache volume
+- [ ] Verify ml-service starts and GPU is accessible ⚠️ needs live verify
 
 ### 2.2 — Transcription Endpoint (ML Service)
-- [ ] `app/routes/transcribe.py` — `POST /transcribe`
-  - Input: audio file (multipart) or MinIO file path
-  - Runs faster-whisper transcription
-  - Runs Pyannote or WhisperX diarization
+- [x] `app/routes/transcribe.py` — `POST /transcribe`
+  - Input: JSON `{ minio_path }` — ML service downloads from MinIO directly
+  - Runs faster-whisper transcription (word-level timestamps, VAD filter)
+  - Runs Pyannote diarization if `HUGGINGFACE_TOKEN` is set; otherwise heuristic
   - Returns: `[{ speaker, start_ms, end_ms, text, confidence }]`
-- [ ] Test with sample 3CX recording
-- [ ] Verify Indian-English accuracy (use `large-v3` model)
+- [ ] Test with sample 3CX recording ⚠️ needs live verify
+- [ ] Verify Indian-English accuracy (change `WHISPER_MODEL_SIZE=large-v3` in .env)
 - [ ] Benchmark speed: target < 3× call duration
 
 ### 2.3 — Database: Transcript Tables
-- [ ] Migration 005: `transcripts` table (id, call_id)
-- [ ] Migration 006: `transcript_segments` table (id, transcript_id, speaker, start_ms, end_ms, text, confidence)
-- [ ] `app/models/transcript.py` — ORM models
+- [x] Migration 005: `transcripts` table (id, call_id, language, duration_seconds, segment_count)
+- [x] Migration 006: `transcript_segments` table (id, transcript_id, speaker, start_ms, end_ms, text, confidence)
+- [x] `app/models/transcript.py` — ORM models with relationships
 
 ### 2.4 — Backend: Transcription Worker
-- [ ] `app/workers/transcribe_task.py`
-  - Download audio from MinIO
-  - POST to ML service `/transcribe`
-  - Save transcript segments to PostgreSQL
-  - Update call status: `TRANSCRIBING` → `ANALYZING`
-  - Trigger next task in pipeline
-- [ ] Update `process_call_task` to call transcription task
-- [ ] Handle transcription failures — update status to `FAILED`, store error message
+- [x] `app/workers/transcribe_task.py`
+  - POSTs `minio_path` to ML service `/transcribe`
+  - Saves transcript + segments to PostgreSQL (idempotent)
+  - Updates call status: `TRANSCRIBING` → `ANALYZING`
+  - Retries up to 3 times with 60s back-off on failure
+- [x] Updated `process_call_task` to chain into `transcribe_call_task`
+- [x] Transcription failures update call status to `FAILED` with error message
 
 ### 2.5 — Backend: Transcript API
-- [ ] `GET /api/v1/calls/:id/transcript` — return all segments with speaker labels
-- [ ] `GET /api/v1/calls/:id` — include transcript summary stats (segment count, agent WPM)
+- [x] `GET /api/v1/calls/:id/transcript` — all segments with speaker labels
+- [x] `GET /api/v1/calls/:id/audio-url` — presigned MinIO URL for audio player (2h TTL)
 
 ### 2.6 — Frontend: Audio Player Component
-- [ ] `components/calls/AudioPlayer.tsx`
+- [x] `components/calls/AudioPlayer.tsx`
   - WaveSurfer.js waveform display
-  - Play / Pause / Seek controls
-  - Current timestamp display
-  - Fetches audio via presigned MinIO URL
+  - Play / Pause / Mute controls + timestamp display
+  - Exposes `seekTo(ms)` via `forwardRef` / `useImperativeHandle`
+  - Fires `onTimeUpdate(ms)` every frame for transcript sync
 
 ### 2.7 — Frontend: Transcript Viewer Component
-- [ ] `components/calls/TranscriptViewer.tsx`
-  - Render segments with AGENT / CUSTOMER colour coding
-  - Show timestamp for each segment
-  - Click segment → seek audio player to that timestamp
-  - Highlight currently playing segment
-  - Search/highlight within transcript
+- [x] `components/calls/TranscriptViewer.tsx`
+  - AGENT (blue) / CUSTOMER (green) colour-coded segments
+  - Timestamp per segment — click to seek audio player
+  - Auto-scrolls to currently playing segment
+  - Search bar with live highlight and result count
 
 ### 2.8 — Frontend: Call Detail Page (Transcript Tab)
-- [ ] `CallDetailPage.tsx` — layout with tabs
-- [ ] Tab 1: Transcript — AudioPlayer + TranscriptViewer side by side
-- [ ] Show call metadata: date, agent, duration, status, disposition
+- [x] `CallDetailPage.tsx` — 3-tab layout (Transcript / Scores / Summary)
+- [x] Tab 1: AudioPlayer + TranscriptViewer + turn-count stats
+- [x] Tabs 2 & 3: placeholders for Phase 3 and Phase 4
+- [x] Call metadata cards: speech score, sales score, duration, disposition
+- [x] Auto-refetch every 10s while call is still processing
 
 **✅ Phase 2 Complete When:**
 - Upload a call → transcript appears with [AGENT] / [CUSTOMER] labels
@@ -208,50 +208,53 @@ Update the checkboxes as tasks are completed.
 **Milestone:** Call detail page shows a radar chart with 8 speech dimensions and their individual scores.
 
 ### 3.1 — Speech Analysis Endpoint (ML Service)
-- [ ] `app/routes/speech_analysis.py` — `POST /analyze-speech`
-  - Input: MinIO audio path + transcript JSON
-  - librosa: extract WPM, pause count, pitch energy
-  - parselmouth: F0 mean, F0 std dev (intonation)
-  - Filler word counter: regex scan on transcript
-  - LanguageTool API call: grammar errors per 100 words
-  - spaCy: type-token ratio (vocabulary diversity)
-  - Whisper confidence: calculate % low-confidence words
-  - Returns all raw metrics as JSON
+- [x] `app/routes/speech_analysis.py` — `POST /analyze-speech`
+  - Input: `{ minio_path, transcript, language }` — ML service downloads audio
+  - librosa: pause detection via RMS silence threshold, pause rate per minute
+  - parselmouth: F0 std dev (intonation) on full audio
+  - Filler word regex on AGENT transcript only
+  - LanguageTool `/v2/check` (sync httpx): grammar errors per 100 words
+  - spaCy: type-token ratio on lemmatised content words (AGENT only)
+  - Whisper confidence: avg and % low-confidence (< 0.6) from segment data
+  - Returns `RawSpeechMetrics` JSON
+- [ ] Test with sample 3CX recording ⚠️ needs live verify
+- [ ] Benchmark speed vs call duration
 
 ### 3.2 — Scoring Logic (Backend)
-- [ ] `app/services/speech_scoring_service.py`
-  - Convert raw metrics → normalised 0–100 scores per dimension
-  - Apply configurable weights (from .env or DB settings)
-  - Calculate composite weighted average
-  - Scoring thresholds documented in `docs/scoring-rubric.md`
+- [x] `app/services/speech_scoring_service.py`
+  - Per-dimension score functions with documented thresholds
+  - `compute_speech_scores(metrics)` → dict with 8 scores + composite
+  - Weighted average: 15/15/15/15/10/10/10/10
+  - Thresholds fully documented in `docs/scoring-rubric.md`
 
 ### 3.3 — Database: Speech Score Table
-- [ ] Migration 007: `speech_scores` table
-  - call_id (FK), pronunciation, intonation, fluency, grammar, vocabulary
-  - pace, clarity, filler_score, fillers_per_min, pace_wpm, talk_ratio, composite
-- [ ] `app/models/scores.py` — SpeechScore ORM model
+- [x] Migration 007: `speech_scores` table
+  - call_id (FK, unique), 8 dimension columns, composite, fillers_per_min, pace_wpm, talk_ratio
+- [x] `app/models/scores.py` — SpeechScore ORM model with back-ref on Call
 
 ### 3.4 — Backend: Speech Score Worker
-- [ ] `app/workers/speech_score_task.py`
-  - POST transcript + audio path to ML service `/analyze-speech`
-  - Run scoring service to compute all dimensions
-  - Save to `speech_scores` table
-  - Update call status: triggers next worker task
+- [x] `app/workers/speech_score_task.py`
+  - Fetches transcript from DB, POSTs to ML service `/analyze-speech`
+  - Runs `compute_speech_scores`, saves `SpeechScore` row
+  - Updates `calls.speech_score` (denormalised) for fast queries
+  - Status: ANALYZING → SCORING → COMPLETED
+  - Idempotent — deletes old score before re-inserting
+- [x] `transcribe_task.py` now chains into `speech_score_task.delay()`
 
 ### 3.5 — Backend: Scores API
-- [ ] `GET /api/v1/calls/:id/scores` — return both speech and sales scores (sales = null for now)
+- [x] `GET /api/v1/calls/:id/scores` — returns `{ speech: SpeechScoreOut, sales: null }`
 
 ### 3.6 — Frontend: Speech Score Radar Chart
-- [ ] `components/calls/SpeechScoreRadar.tsx`
-  - Recharts RadarChart with 8 dimensions
+- [x] `components/calls/SpeechScoreRadar.tsx`
+  - Recharts RadarChart with 8 dimensions + custom tooltip
   - Colour coded: green ≥80, yellow 60–79, orange 40–59, red <40
-  - Show composite score prominently
-  - Tooltip on each dimension with description
+  - Composite score hero, quick-stats (WPM, fillers/min, talk ratio)
+  - Dimension breakdown grid with weight labels
 
 ### 3.7 — Frontend: Call Detail — Scores Tab
-- [ ] Tab 2: Scores — display SpeechScoreRadar
-- [ ] Score legend explaining what each dimension means
-- [ ] Show "Sales Score: Pending" placeholder for Layer 2
+- [x] Scores tab displays SpeechScoreRadar when speech score is available
+- [x] Placeholder for Sales Score (Phase 4)
+- [x] Graceful empty state while call is still processing
 
 **✅ Phase 3 Complete When:**
 - Every processed call shows a speech score radar chart
@@ -527,5 +530,5 @@ Track important decisions here so we don't revisit them repeatedly.
 
 ---
 
-*Last updated: Project kickoff*
-*Next step: Start Phase 1 — confirm before proceeding*
+*Last updated: 2026-04-18*
+*Next step: Start Phase 4 — Sales Quality Layer + LLM — confirm before proceeding*

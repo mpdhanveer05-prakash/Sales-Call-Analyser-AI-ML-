@@ -50,3 +50,46 @@ export interface ApiError {
   error: string;
   code: string;
 }
+
+export interface TranscriptSegment {
+  id: string;
+  speaker: "AGENT" | "CUSTOMER";
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  confidence: number | null;
+}
+
+export interface Transcript {
+  id: string;
+  call_id: string;
+  language: string | null;
+  duration_seconds: number | null;
+  segment_count: number;
+  segments: TranscriptSegment[];
+  created_at: string;
+}
+
+export interface SpeechScore {
+  id: string;
+  call_id: string;
+  pronunciation: number;
+  intonation: number;
+  fluency: number;
+  grammar: number;
+  vocabulary: number;
+  pace: number;
+  clarity: number;
+  filler_score: number;
+  composite: number;
+  fillers_per_min: number | null;
+  pace_wpm: number | null;
+  talk_ratio: number | null;
+  created_at: string;
+}
+
+export interface CallScores {
+  call_id: string;
+  speech: SpeechScore | null;
+  sales: null;
+}

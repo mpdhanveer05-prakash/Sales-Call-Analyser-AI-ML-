@@ -24,14 +24,18 @@ async def _update_call_status(call_id: str, status: CallStatus, error: str | Non
 
 @celery_app.task(name="process_call", bind=True, max_retries=3)
 def process_call_task(self, call_id: str) -> dict:
-    logger.info(f"Processing call {call_id}")
+    logger.info("process_call received for call %s — dispatching transcription", call_id)
 
     try:
-        asyncio.run(_update_call_status(call_id, CallStatus.ANALYZING))
-        # Stub: Phase 2 will add real transcription here
-        logger.info(f"Call {call_id} picked up by worker (stub — Phase 2 adds transcription)")
-        return {"call_id": call_id, "status": "stub_complete"}
+        asyncio.run(_update_call_status(call_id, CallStatus.QUEUED))
+
+        # Chain to the transcription task
+        from app.workers.transcribe_task import transcribe_call_task
+        transcribe_call_task.delay(call_id)
+
+        return {"call_id": call_id, "dispatched": "transcribe_call"}
+
     except Exception as exc:
-        logger.error(f"Error processing call {call_id}: {exc}")
+        logger.error("Error dispatching call %s: %s", call_id, exc)
         asyncio.run(_update_call_status(call_id, CallStatus.FAILED, str(exc)))
         raise self.retry(exc=exc, countdown=30)
