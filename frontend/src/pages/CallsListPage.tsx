@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { format } from "date-fns";
 import { RefreshCw, Upload, Search } from "lucide-react";
 import { useCalls } from "@/hooks/useCalls";
 import { useAgents } from "@/hooks/useAgents";
 import { StatusBadge } from "@/components/ui/badge";
+import DispositionBadge from "@/components/calls/DispositionBadge";
 import type { CallStatus } from "@/types";
 
 const STATUS_OPTIONS: { label: string; value: string }[] = [
@@ -162,7 +163,15 @@ export default function CallsListPage() {
                   <td className="px-5 py-3.5 text-gray-700 whitespace-nowrap">
                     {format(new Date(call.call_date), "dd MMM yyyy")}
                   </td>
-                  <td className="px-5 py-3.5 text-gray-900 font-medium whitespace-nowrap">{call.agent_name}</td>
+                  <td className="px-5 py-3.5 whitespace-nowrap">
+                    <Link
+                      to={`/agents/${call.agent_id}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="font-medium text-gray-900 hover:text-brand-600 transition-colors"
+                    >
+                      {call.agent_name}
+                    </Link>
+                  </td>
                   <td className="px-5 py-3.5 text-gray-500 max-w-[180px] truncate" title={call.original_filename}>
                     {call.original_filename}
                   </td>
@@ -170,7 +179,9 @@ export default function CallsListPage() {
                   <td className="px-5 py-3.5">
                     <StatusBadge status={call.status as CallStatus} />
                   </td>
-                  <td className="px-5 py-3.5 text-gray-500 text-xs">{call.disposition ?? "—"}</td>
+                  <td className="px-5 py-3.5">
+                    {call.disposition ? <DispositionBadge disposition={call.disposition} size="sm" /> : <span className="text-gray-400 text-xs">—</span>}
+                  </td>
                   <td className="px-5 py-3.5 text-right font-medium">
                     {call.speech_score !== null ? (
                       <span className={

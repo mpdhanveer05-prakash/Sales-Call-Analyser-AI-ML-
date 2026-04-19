@@ -1,23 +1,28 @@
 import { useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Clock, FileText, BarChart2, MessageSquare } from "lucide-react";
+import { ArrowLeft, Clock, FileText, BarChart2, MessageSquare, Lightbulb } from "lucide-react";
 import { format } from "date-fns";
 
-import { fetchCall, fetchTranscript, fetchAudioUrl, fetchScores } from "@/api/calls";
+import { fetchCall, fetchTranscript, fetchAudioUrl, fetchScores, fetchSummary, fetchCoaching } from "@/api/calls";
 import { StatusBadge } from "@/components/ui/badge";
 import AudioPlayer, { type AudioPlayerHandle } from "@/components/calls/AudioPlayer";
 import TranscriptViewer from "@/components/calls/TranscriptViewer";
 import SpeechScoreRadar from "@/components/calls/SpeechScoreRadar";
+import SalesScoreRadar from "@/components/calls/SalesScoreRadar";
+import SummaryCard from "@/components/calls/SummaryCard";
+import DispositionBadge from "@/components/calls/DispositionBadge";
+import CoachingTab from "@/components/calls/CoachingTab";
 import type { CallStatus } from "@/types";
 import { clsx } from "clsx";
 
-type Tab = "transcript" | "scores" | "summary";
+type Tab = "transcript" | "scores" | "summary" | "coaching";
 
 const TABS: { id: Tab; label: string; icon: typeof FileText }[] = [
   { id: "transcript", label: "Transcript", icon: FileText },
   { id: "scores", label: "Scores", icon: BarChart2 },
   { id: "summary", label: "Summary", icon: MessageSquare },
+  { id: "coaching", label: "Coaching", icon: Lightbulb },
 ];
 
 export default function CallDetailPage() {
@@ -32,8 +37,8 @@ export default function CallDetailPage() {
     queryKey: ["call", id],
     queryFn: () => fetchCall(id!),
     enabled: !!id,
-    refetchInterval: (data) =>
-      data && !["COMPLETED", "FAILED"].includes(data.status) ? 10_000 : false,
+    refetchInterval: (query) =>
+      query.state.data && !["COMPLETED", "FAILED"].includes(query.state.data.status) ? 10_000 : false,
   });
 
   const isCompleted = call?.status === "COMPLETED";
@@ -55,6 +60,20 @@ export default function CallDetailPage() {
   const { data: scores } = useQuery({
     queryKey: ["scores", id],
     queryFn: () => fetchScores(id!),
+    enabled: !!id && isCompleted,
+    retry: false,
+  });
+
+  const { data: summary } = useQuery({
+    queryKey: ["summary", id],
+    queryFn: () => fetchSummary(id!),
+    enabled: !!id && isCompleted,
+    retry: false,
+  });
+
+  const { data: coaching } = useQuery({
+    queryKey: ["coaching", id],
+    queryFn: () => fetchCoaching(id!),
     enabled: !!id && isCompleted,
     retry: false,
   });
@@ -107,13 +126,20 @@ export default function CallDetailPage() {
           { label: "Speech Score", value: call.speech_score?.toFixed(0) ?? "—" },
           { label: "Sales Score", value: call.sales_score?.toFixed(0) ?? "—" },
           { label: "Duration", value: durationLabel },
-          { label: "Disposition", value: call.disposition?.replace(/_/g, " ") ?? "—" },
         ].map(({ label, value }) => (
           <div key={label} className="bg-white rounded-xl border border-gray-200 p-4">
             <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">{label}</p>
             <p className="text-lg font-bold text-gray-900">{value}</p>
           </div>
         ))}
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Disposition</p>
+          {call.disposition ? (
+            <DispositionBadge disposition={call.disposition} />
+          ) : (
+            <p className="text-lg font-bold text-gray-900">—</p>
+          )}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -203,33 +229,71 @@ export default function CallDetailPage() {
       )}
 
       {activeTab === "scores" && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          {scores?.speech ? (
-            <SpeechScoreRadar score={scores.speech} />
-          ) : isCompleted ? (
-            <div className="flex items-center gap-2 text-sm text-gray-400">
-              <BarChart2 size={16} />
-              Speech scores not yet available for this call.
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 text-sm text-gray-400">
-              <BarChart2 size={16} />
-              Scores will appear once the call finishes processing.
-            </div>
-          )}
-          {scores?.sales === null && isCompleted && (
-            <p className="text-xs text-gray-400 mt-4 border-t border-gray-100 pt-3">
-              Sales Quality Score — available after Phase 4
-            </p>
-          )}
+        <div className="space-y-4">
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Speech Quality</h3>
+            {scores?.speech ? (
+              <SpeechScoreRadar score={scores.speech} />
+            ) : isCompleted ? (
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <BarChart2 size={16} /> Speech scores not yet available.
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <BarChart2 size={16} /> Scores will appear once processing completes.
+              </div>
+            )}
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Sales Quality</h3>
+            {scores?.sales ? (
+              <SalesScoreRadar score={scores.sales} />
+            ) : isCompleted ? (
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <BarChart2 size={16} /> Sales scores not yet available.
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <BarChart2 size={16} /> Scores will appear once processing completes.
+              </div>
+            )}
+          </div>
         </div>
       )}
 
       {activeTab === "summary" && (
-        <div className="bg-white rounded-xl border border-gray-200 p-8 flex items-center gap-3 text-gray-400">
-          <MessageSquare size={20} />
-          <span className="text-sm">Call summary, disposition, and coaching suggestions will be available after Phase 4 is built.</span>
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          {summary ? (
+            <div className="space-y-4">
+              {call.disposition && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Outcome</span>
+                  <DispositionBadge disposition={call.disposition} />
+                </div>
+              )}
+              <SummaryCard summary={summary} />
+            </div>
+          ) : isCompleted ? (
+            <div className="flex items-center gap-3 text-gray-400">
+              <MessageSquare size={20} />
+              <span className="text-sm">Summary not yet available for this call.</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 text-gray-400">
+              <MessageSquare size={20} />
+              <span className="text-sm">Summary will appear once the call finishes processing.</span>
+            </div>
+          )}
         </div>
+      )}
+
+      {activeTab === "coaching" && (
+        <CoachingTab
+          callId={id!}
+          clips={coaching?.coaching_clips ?? []}
+          objections={coaching?.objections ?? []}
+          onSeek={handleSeek}
+        />
       )}
     </div>
   );

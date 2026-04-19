@@ -1,9 +1,10 @@
 import math
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status
+from pydantic import BaseModel
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
@@ -12,8 +13,10 @@ from app.database import get_db
 from app.dependencies import CurrentUser
 from app.models.call import Call, CallStatus
 from app.models.agent import Agent
+from app.models.coaching import CoachingClip, Objection
 from app.models.user import User, UserRole
 from app.schemas.call import CallListResponse, CallOut, CallUploadResponse
+from app.schemas.coaching import CoachingClipOut, ObjectionOut
 from app.schemas.transcript import TranscriptOut, TranscriptSegmentOut
 from app.schemas.scores import CallScoresOut, SpeechScoreOut, SalesScoreOut
 from app.schemas.summary import SummaryOut
@@ -22,6 +25,11 @@ from app.models.scores import SpeechScore, SalesScore
 from app.models.summary import Summary
 from app.services import storage_service
 from app.config import settings
+
+
+class CoachingOut(BaseModel):
+    coaching_clips: List[CoachingClipOut]
+    objections: List[ObjectionOut]
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -412,3 +420,79 @@ async def get_call_summary(
         disposition_reasoning=summary.disposition_reasoning,
         created_at=summary.created_at,
     )
+
+
+@router.get("/{call_id}/coaching", response_model=CoachingOut)
+async def get_call_coaching(
+    call_id: UUID,
+    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    db: AsyncSession = Depends(get_db),
+) -> CoachingOut:
+    call_result = await db.execute(
+        select(Call).options(selectinload(Call.agent)).where(Call.id == call_id)
+    )
+    call = call_result.scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+
+    if current_user.role == UserRole.AGENT:
+        agent_result = await db.execute(select(Agent).where(Agent.user_id == current_user.id))
+        own_agent = agent_result.scalar_one_or_none()
+        if not own_agent or call.agent_id != own_agent.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    elif current_user.role == UserRole.MANAGER and current_user.team_id:
+        if call.agent.team_id != current_user.team_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    clips_result = await db.execute(
+        select(CoachingClip).where(CoachingClip.call_id == call_id).order_by(CoachingClip.start_ms)
+    )
+    clips = clips_result.scalars().all()
+
+    objections_result = await db.execute(
+        select(Objection).where(Objection.call_id == call_id).order_by(Objection.timestamp_ms)
+    )
+    objections = objections_result.scalars().all()
+
+    return CoachingOut(
+        coaching_clips=[CoachingClipOut.model_validate(c) for c in clips],
+        objections=[ObjectionOut.model_validate(o) for o in objections],
+    )
+
+
+@router.post("/{call_id}/objections/{objection_id}/resolve", response_model=ObjectionOut)
+async def resolve_objection(
+    call_id: UUID,
+    objection_id: UUID,
+    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    db: AsyncSession = Depends(get_db),
+) -> ObjectionOut:
+    # Require MANAGER or ADMIN role
+    if current_user.role == UserRole.AGENT:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Managers and admins only")
+
+    call_result = await db.execute(
+        select(Call).options(selectinload(Call.agent)).where(Call.id == call_id)
+    )
+    call = call_result.scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+
+    # Managers are scoped to their team
+    if current_user.role == UserRole.MANAGER and current_user.team_id:
+        if call.agent.team_id != current_user.team_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    obj_result = await db.execute(
+        select(Objection).where(Objection.id == objection_id, Objection.call_id == call_id)
+    )
+    objection = obj_result.scalar_one_or_none()
+    if objection is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Objection not found")
+
+    # Toggle resolved
+    objection.resolved = not objection.resolved
+    await db.commit()
+    await db.refresh(objection)
+
+    return ObjectionOut.model_validate(objection)

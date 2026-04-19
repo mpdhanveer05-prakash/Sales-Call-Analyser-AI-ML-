@@ -20,9 +20,13 @@ export default function TranscriptViewer({ segments, currentTimeMs, onSeek }: Pr
   const [query, setQuery] = useState("");
   const activeRef = useRef<HTMLDivElement>(null);
 
-  const activeIdx = segments.findLastIndex(
-    (s) => currentTimeMs >= s.start_ms && currentTimeMs < s.end_ms
-  );
+  let activeIdx = -1;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (currentTimeMs >= segments[i].start_ms && currentTimeMs < segments[i].end_ms) {
+      activeIdx = i;
+      break;
+    }
+  }
 
   // Auto-scroll to active segment
   useEffect(() => {

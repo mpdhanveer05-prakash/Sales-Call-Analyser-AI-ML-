@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from app.models.transcript import Transcript
     from app.models.scores import SpeechScore, SalesScore
     from app.models.summary import Summary
+    from app.models.coaching import CoachingClip, Objection
 
 
 class CallStatus(str, enum.Enum):
@@ -54,3 +55,5 @@ class Call(Base):
     speech_score: Mapped[Optional["SpeechScore"]] = relationship("SpeechScore", back_populates="call", uselist=False)
     sales_score: Mapped[Optional["SalesScore"]] = relationship("SalesScore", back_populates="call", uselist=False)
     summary: Mapped[Optional["Summary"]] = relationship("Summary", back_populates="call", uselist=False)
+    coaching_clips: Mapped[list["CoachingClip"]] = relationship("CoachingClip", back_populates="call", cascade="all, delete-orphan")
+    objections: Mapped[list["Objection"]] = relationship("Objection", back_populates="call", cascade="all, delete-orphan")

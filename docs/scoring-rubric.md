@@ -76,25 +76,58 @@ LLM-scored (Ollama `llama3.1:8b`). Implemented in Phase 4.
 
 Each dimension returns: `score (0–10)` + `justification` + `quote from transcript`.
 
-| Dimension | Weight | What is Measured |
-|---|---|---|
-| Greeting & Introduction | 10% | Professional opener, name/company stated |
-| Rapport Building | 10% | Personalisation, active listening |
-| Discovery Questions | 15% | Open-ended questions, need exploration |
-| Value Explanation | 20% | Benefit articulation tied to prospect's need |
-| Objection Handling | 20% | Empathy → acknowledge → address → confirm |
-| Script Adherence | 10% | Required talking points from active script |
-| Closing & Next Step | 10% | Explicit ask, agreed next action |
-| Compliance | 5% | Required disclosures, no prohibited statements |
+| Dimension | Weight | What is Measured | Score 10 looks like | Score 0–3 looks like |
+|---|---|---|---|---|
+| Greeting & Introduction | 10% | Professional opener, name/company stated | Full intro, agent + company named, warm tone | Agent jumps straight to pitch, no name given |
+| Rapport Building | 10% | Personalisation, active listening | References customer context, genuine conversation | Robotic script read, no acknowledgement |
+| Discovery Questions | 15% | Open-ended questions, need exploration | 3+ open-ended questions, pauses to listen | No questions asked, agent monologues |
+| Value Explanation | 20% | Benefit articulation tied to prospect's need | Connects product benefits directly to prospect pain | Generic feature list with no customer context |
+| Objection Handling | 20% | Empathy → acknowledge → address → confirm | Full EAAC cycle; objection resolved | Argues, dismisses, or ignores objection |
+| Script Adherence | 10% | Required talking points from active script | All required points covered, disclosures made | Key required points missed |
+| Closing & Next Step | 10% | Explicit ask, agreed next action | Clear ask + confirmed date/action for next step | Call ends without any ask or next step |
+| Compliance | 5% | Required disclosures, no prohibited statements | All required disclosures made, no violations | Prohibited phrase used or required disclosure missing |
 
-### Conversion
-Each LLM dimension score (0–10) is multiplied by 10 before weighting.
+### Score Interpretation
+
+| Range | Grade | Meaning |
+|---|---|---|
+| 90–100 | Excellent | Top performer, minimal coaching needed |
+| 75–89 | Good | Solid call with minor gaps |
+| 60–74 | Developing | Several areas need attention |
+| 40–59 | Needs Improvement | Significant gaps in technique |
+| 0–39 | Critical | Immediate coaching required |
+
+### Dimension Score Conversion
+Each LLM dimension score (0–10) is multiplied by 10 before applying weights.
 
 ---
 
 ## Composite Score
+
 ```
 speech_composite = Σ (dimension_score × weight)
 sales_composite  = Σ (dimension_score × weight)
 ```
+
 Both are stored on the `calls` table (`speech_score`, `sales_score`) for fast leaderboard ranking and filtering.
+
+---
+
+## Coaching Moments (Phase 6)
+
+Extracted by the LLM from the full timestamped transcript. Each moment has:
+- `start_ms` / `end_ms` — aligned to actual transcript segment boundaries
+- `category` — one of: `greeting`, `rapport`, `discovery`, `value_proposition`, `objection_handling`, `closing`, `compliance`, `missed_opportunity`
+- `reason` — 1–2 sentence plain-language explanation for the agent
+
+Moments are surfaced in the **Coaching** tab of the Call Detail page, with a play button to jump the audio player to that timestamp.
+
+## Objections (Phase 6)
+
+The LLM also extracts customer objections from the transcript:
+- `timestamp_ms` — when the objection was raised
+- `objection_type` — `PRICE`, `TIMING`, `AUTHORITY`, `NEED`, `COMPETITOR`, or `OTHER`
+- `quote` — verbatim customer statement
+- `resolved` — toggled by the manager after reviewing (defaults to false)
+
+Objections appear in the Coaching tab and can be marked resolved via the UI.

@@ -260,3 +260,203 @@ def classify_disposition(segments: list[dict]) -> dict:
         "confidence": round(confidence, 3),
         "reasoning": str(raw.get("reasoning", "")),
     }
+
+
+# ---------------------------------------------------------------------------
+# Coaching moments extraction
+# ---------------------------------------------------------------------------
+
+COACHING_CATEGORIES = [
+    "greeting", "rapport", "discovery", "value_proposition",
+    "objection_handling", "closing", "compliance", "missed_opportunity",
+]
+
+_COACHING_SYSTEM = (
+    "You are an expert sales coach reviewing a recorded sales call. "
+    "Identify specific moments where the agent could improve. Output structured JSON only."
+)
+
+_COACHING_PROMPT_TEMPLATE = """Review this sales call transcript and identify 3 to 5 specific coaching moments where the agent could improve.
+
+TRANSCRIPT:
+{transcript}
+
+For each coaching moment, provide the approximate start and end timestamps in milliseconds, a category, and a reason explaining the coaching opportunity.
+
+Valid categories: {categories}
+
+Return ONLY valid JSON with this exact structure (no extra text):
+{{
+  "moments": [
+    {{
+      "start_ms": 5000,
+      "end_ms": 35000,
+      "category": "objection_handling",
+      "reason": "Agent failed to acknowledge the customer price concern before jumping to justification."
+    }}
+  ]
+}}"""
+
+
+def _format_transcript_with_timestamps(segments: list[dict], max_words: int = 3000) -> str:
+    """Format transcript as 'SPEAKER [M:SS]: text' with timestamps."""
+    lines: list[str] = []
+    word_count = 0
+    for seg in segments:
+        start_sec = seg["start_ms"] // 1000
+        m, s = divmod(start_sec, 60)
+        text = seg["text"].strip()
+        words = text.split()
+        if word_count + len(words) > max_words:
+            lines.append(f"{seg['speaker']} [{m}:{s:02d}]: [...transcript truncated for length...]")
+            break
+        lines.append(f"{seg['speaker']} [{m}:{s:02d}]: {text}")
+        word_count += len(words)
+    return "\n".join(lines)
+
+
+def extract_coaching_moments(segments: list[dict]) -> list[dict]:
+    """
+    Identify 3-5 coaching moments from transcript segments using the LLM.
+
+    Returns a list of dicts with keys: start_ms, end_ms, category, reason.
+    Always returns [] on any error — never raises.
+    """
+    if not segments:
+        return []
+
+    try:
+        transcript = _format_transcript_with_timestamps(segments, max_words=3000)
+        categories_str = ", ".join(COACHING_CATEGORIES)
+        prompt = _COACHING_PROMPT_TEMPLATE.format(
+            transcript=transcript,
+            categories=categories_str,
+        )
+        raw = _call_ollama(prompt, _COACHING_SYSTEM)
+
+        moments_raw = raw.get("moments", [])
+        if not isinstance(moments_raw, list):
+            logger.warning("extract_coaching_moments: LLM returned non-list moments field")
+            return []
+
+        result: list[dict] = []
+        for item in moments_raw[:10]:  # cap at 10 for safety
+            if not isinstance(item, dict):
+                continue
+            try:
+                start_ms = int(item.get("start_ms", 0))
+                end_ms = int(item.get("end_ms", 0))
+            except (TypeError, ValueError):
+                continue
+
+            category = str(item.get("category", "missed_opportunity")).lower().strip()
+            if category not in COACHING_CATEGORIES:
+                category = "missed_opportunity"
+
+            reason = str(item.get("reason", "")).strip()
+            if not reason:
+                continue
+
+            result.append({
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "category": category,
+                "reason": reason,
+            })
+
+        return result
+
+    except Exception as exc:
+        logger.warning("extract_coaching_moments failed for call — returning []: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Objection extraction
+# ---------------------------------------------------------------------------
+
+OBJECTION_TYPES = ["PRICE", "TIMING", "AUTHORITY", "NEED", "COMPETITOR", "OTHER"]
+
+_OBJECTION_SYSTEM = (
+    "You are a sales analyst identifying customer objections in call transcripts. "
+    "Output structured JSON only."
+)
+
+_OBJECTION_PROMPT_TEMPLATE = """Review this sales call transcript and identify all customer objections raised.
+
+TRANSCRIPT:
+{transcript}
+
+For each objection, provide the timestamp in milliseconds, the objection type, an exact or near-exact quote from the customer, and whether the agent successfully resolved it.
+
+Valid objection_types: {types}
+
+Return ONLY valid JSON with this exact structure (no extra text):
+{{
+  "objections": [
+    {{
+      "timestamp_ms": 45000,
+      "objection_type": "PRICE",
+      "quote": "That seems quite expensive for what we are getting.",
+      "resolved": true
+    }}
+  ]
+}}"""
+
+
+def extract_objections(segments: list[dict]) -> list[dict]:
+    """
+    Extract customer objections from transcript segments using the LLM.
+
+    Returns a list of dicts with keys: timestamp_ms, objection_type, quote, resolved.
+    Always returns [] on any error — never raises.
+    """
+    if not segments:
+        return []
+
+    try:
+        transcript = _format_transcript_with_timestamps(segments, max_words=3000)
+        types_str = ", ".join(OBJECTION_TYPES)
+        prompt = _OBJECTION_PROMPT_TEMPLATE.format(
+            transcript=transcript,
+            types=types_str,
+        )
+        raw = _call_ollama(prompt, _OBJECTION_SYSTEM)
+
+        objections_raw = raw.get("objections", [])
+        if not isinstance(objections_raw, list):
+            logger.warning("extract_objections: LLM returned non-list objections field")
+            return []
+
+        result: list[dict] = []
+        for item in objections_raw[:20]:  # cap at 20 for safety
+            if not isinstance(item, dict):
+                continue
+            try:
+                timestamp_ms = int(item.get("timestamp_ms", 0))
+            except (TypeError, ValueError):
+                timestamp_ms = 0
+
+            objection_type = str(item.get("objection_type", "OTHER")).upper().strip()
+            if objection_type not in OBJECTION_TYPES:
+                objection_type = "OTHER"
+
+            quote = str(item.get("quote", "")).strip()
+            if not quote:
+                continue
+
+            resolved_raw = item.get("resolved", False)
+            resolved = bool(resolved_raw) if isinstance(resolved_raw, bool) else str(resolved_raw).lower() == "true"
+
+            result.append({
+                "timestamp_ms": timestamp_ms,
+                "objection_type": objection_type,
+                "quote": quote,
+                "resolved": resolved,
+            })
+
+        return result
+
+    except Exception as exc:
+        logger.warning("extract_objections failed for call — returning []: %s", exc)
+        return []

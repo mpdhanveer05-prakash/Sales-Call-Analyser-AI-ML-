@@ -1,4 +1,4 @@
-import { Lightbulb, Clock, TrendingUp } from "lucide-react";
+import { Lightbulb, Clock } from "lucide-react";
 import type { Summary } from "@/types";
 
 interface Props {

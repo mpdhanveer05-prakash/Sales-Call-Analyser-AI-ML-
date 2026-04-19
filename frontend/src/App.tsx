@@ -1,9 +1,14 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useAuthStore } from "@/store/authStore";
+import ToastContainer from "@/components/ui/ToastContainer";
 import LoginPage from "@/pages/LoginPage";
 import UploadPage from "@/pages/UploadPage";
 import CallsListPage from "@/pages/CallsListPage";
 import CallDetailPage from "@/pages/CallDetailPage";
+import SettingsPage from "@/pages/SettingsPage";
+import SearchPage from "@/pages/SearchPage";
+import AgentScorecardPage from "@/pages/AgentScorecardPage";
+import TeamDashboardPage from "@/pages/TeamDashboardPage";
 import Layout from "@/components/Layout";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -28,9 +33,14 @@ export default function App() {
           <Route path="calls" element={<CallsListPage />} />
           <Route path="calls/:id" element={<CallDetailPage />} />
           <Route path="upload" element={<UploadPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+          <Route path="search" element={<SearchPage />} />
+          <Route path="agents/:id" element={<AgentScorecardPage />} />
+          <Route path="dashboard" element={<TeamDashboardPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/calls" replace />} />
       </Routes>
+      <ToastContainer />
     </BrowserRouter>
   );
 }

@@ -3,7 +3,7 @@ import os
 
 from fastapi import FastAPI
 
-from app.routes import transcribe, speech_analysis
+from app.routes import transcribe, speech_analysis, embed
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -17,6 +17,7 @@ app = FastAPI(
 
 app.include_router(transcribe.router)
 app.include_router(speech_analysis.router)
+app.include_router(embed.router)
 
 
 @app.get("/health", tags=["health"])

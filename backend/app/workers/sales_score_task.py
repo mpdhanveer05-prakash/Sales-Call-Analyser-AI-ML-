@@ -9,6 +9,7 @@ from sqlalchemy.orm import joinedload
 from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models.call import Call, CallStatus
+from app.models.coaching import CoachingClip, Objection
 from app.models.scores import SalesScore
 from app.models.summary import Summary
 from app.models.transcript import Transcript
@@ -75,7 +76,14 @@ async def _fetch_data(call_id: str) -> tuple[list[dict], dict]:
     return segs, rubric
 
 
-async def _save_results(call_id: str, sales_result: dict, summary_result: dict, disposition_result: dict) -> None:
+async def _save_results(
+    call_id: str,
+    sales_result: dict,
+    summary_result: dict,
+    disposition_result: dict,
+    coaching_moments: list[dict],
+    objections: list[dict],
+) -> None:
     async with AsyncSessionLocal() as db:
         # Remove previous records (idempotent)
         for Model in (SalesScore, Summary):
@@ -83,6 +91,16 @@ async def _save_results(call_id: str, sales_result: dict, summary_result: dict, 
             row = existing.scalar_one_or_none()
             if row:
                 await db.delete(row)
+
+        # Remove previous coaching clips and objections (idempotent)
+        old_clips = await db.execute(select(CoachingClip).where(CoachingClip.call_id == UUID(call_id)))
+        for clip in old_clips.scalars().all():
+            await db.delete(clip)
+
+        old_objections = await db.execute(select(Objection).where(Objection.call_id == UUID(call_id)))
+        for obj in old_objections.scalars().all():
+            await db.delete(obj)
+
         await db.flush()
 
         dim = sales_result["dimension_scores"]
@@ -109,6 +127,26 @@ async def _save_results(call_id: str, sales_result: dict, summary_result: dict, 
             disposition_reasoning=disposition_result.get("reasoning"),
         ))
 
+        # Save coaching clips
+        for moment in coaching_moments:
+            db.add(CoachingClip(
+                call_id=UUID(call_id),
+                start_ms=moment["start_ms"],
+                end_ms=moment["end_ms"],
+                category=moment["category"],
+                reason=moment["reason"],
+            ))
+
+        # Save objections
+        for obj in objections:
+            db.add(Objection(
+                call_id=UUID(call_id),
+                timestamp_ms=obj["timestamp_ms"],
+                objection_type=obj["objection_type"],
+                quote=obj["quote"],
+                resolved=obj["resolved"],
+            ))
+
         # Update denormalised columns on call
         call_result = await db.execute(select(Call).where(Call.id == UUID(call_id)))
         call = call_result.scalar_one_or_none()
@@ -118,8 +156,10 @@ async def _save_results(call_id: str, sales_result: dict, summary_result: dict, 
 
         await db.commit()
         logger.info(
-            "Saved sales scores for call %s — composite=%.1f, disposition=%s",
+            "Saved sales scores for call %s — composite=%.1f, disposition=%s, "
+            "coaching_clips=%d, objections=%d",
             call_id, sales_result["composite"], disposition_result["disposition"],
+            len(coaching_moments), len(objections),
         )
 
 
@@ -145,13 +185,28 @@ def sales_score_task(self, call_id: str) -> dict:
         logger.info("Running Ollama disposition classification for call %s", call_id)
         disposition_result = ollama_service.classify_disposition(segments)
 
-        asyncio.run(_save_results(call_id, sales_result, summary_result, disposition_result))
+        logger.info("Extracting coaching moments and objections for call %s", call_id)
+        coaching_moments = ollama_service.extract_coaching_moments(segments)
+        objections = ollama_service.extract_objections(segments)
+
+        asyncio.run(_save_results(
+            call_id, sales_result, summary_result, disposition_result,
+            coaching_moments, objections,
+        ))
         asyncio.run(_update_call_status(call_id, CallStatus.COMPLETED))
 
         logger.info(
             "Sales scoring complete for call %s — composite=%.1f, disposition=%s",
             call_id, sales_result["composite"], disposition_result["disposition"],
         )
+
+        # Chain index task (best-effort)
+        try:
+            from app.workers.index_task import index_task
+            index_task.delay(call_id)
+        except Exception as e:
+            logger.warning("Could not dispatch index_task for call %s: %s", call_id, e)
+
         return {
             "call_id": call_id,
             "sales_composite": sales_result["composite"],

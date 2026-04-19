@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { useDropzone } from "react-dropzone";
+import { useDropzone, type FileRejection } from "react-dropzone";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -54,7 +54,7 @@ export default function UploadPage() {
     setValue("agent_id", agentUser.id);
   }
 
-  const onDrop = useCallback((accepted: File[], rejected: File[]) => {
+  const onDrop = useCallback((accepted: File[], rejected: FileRejection[]) => {
     setFileError(null);
     if (rejected.length > 0) {
       setFileError(`Rejected: ${rejected.map((r) => r.file.name).join(", ")}. Only ${ALLOWED_EXTS.join(", ")} files up to ${MAX_SIZE_MB} MB.`);

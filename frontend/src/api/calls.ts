@@ -1,5 +1,5 @@
 import apiClient from "./client";
-import type { Call, PaginatedResponse, Transcript, CallScores } from "@/types";
+import type { Call, PaginatedResponse, Transcript, CallScores, Summary, CoachingData } from "@/types";
 
 export interface CallFilters {
   page?: number;
@@ -40,5 +40,20 @@ export async function fetchAudioUrl(callId: string): Promise<string> {
 
 export async function fetchScores(callId: string): Promise<CallScores> {
   const { data } = await apiClient.get<CallScores>(`/calls/${callId}/scores`);
+  return data;
+}
+
+export async function fetchSummary(callId: string): Promise<Summary> {
+  const { data } = await apiClient.get<Summary>(`/calls/${callId}/summary`);
+  return data;
+}
+
+export async function fetchCoaching(callId: string): Promise<CoachingData> {
+  const { data } = await apiClient.get<CoachingData>(`/calls/${callId}/coaching`);
+  return data;
+}
+
+export async function resolveObjection(callId: string, objectionId: string): Promise<{ id: string; resolved: boolean }> {
+  const { data } = await apiClient.post(`/calls/${callId}/objections/${objectionId}/resolve`);
   return data;
 }
