@@ -18,6 +18,7 @@ from app.config import settings
 from app.models.user import User, UserRole
 from app.models.team import Team
 from app.models.agent import Agent
+import app.models  # ensures all models are registered before SQLAlchemy configures mappers
 from app.services.auth_service import hash_password
 
 

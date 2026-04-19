@@ -9,21 +9,23 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, ENUM as PG_ENUM
 
 revision: str = "004_create_calls"
 down_revision: Union[str, None] = "003_create_agents"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-call_status_enum = sa.Enum(
-    "QUEUED", "TRANSCRIBING", "ANALYZING", "SCORING", "COMPLETED", "FAILED",
-    name="callstatus",
-)
-
 
 def upgrade() -> None:
-    call_status_enum.create(op.get_bind(), checkfirst=True)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE callstatus AS ENUM (
+                'QUEUED', 'TRANSCRIBING', 'ANALYZING', 'SCORING', 'COMPLETED', 'FAILED'
+            );
+        EXCEPTION WHEN duplicate_object THEN null;
+        END $$;
+    """)
     op.create_table(
         "calls",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -32,7 +34,7 @@ def upgrade() -> None:
         sa.Column("audio_url", sa.Text, nullable=False),
         sa.Column("original_filename", sa.String(500), nullable=False),
         sa.Column("file_size_bytes", sa.Integer, nullable=True),
-        sa.Column("status", call_status_enum, nullable=False, server_default="QUEUED"),
+        sa.Column("status", PG_ENUM("QUEUED", "TRANSCRIBING", "ANALYZING", "SCORING", "COMPLETED", "FAILED", name="callstatus", create_type=False), nullable=False, server_default="QUEUED"),
         sa.Column("duration_seconds", sa.Integer, nullable=True),
         sa.Column("call_date", sa.Date, nullable=False),
         sa.Column("disposition", sa.String(50), nullable=True),
@@ -54,4 +56,4 @@ def downgrade() -> None:
     op.drop_index("ix_calls_status", table_name="calls")
     op.drop_index("ix_calls_agent_id", table_name="calls")
     op.drop_table("calls")
-    call_status_enum.drop(op.get_bind(), checkfirst=True)
+    op.execute("DROP TYPE IF EXISTS callstatus")

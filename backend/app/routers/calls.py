@@ -62,7 +62,7 @@ async def upload_call(
     file: UploadFile = File(...),
     agent_id: UUID = Form(...),
     call_date: date = Form(...),
-    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> CallUploadResponse:
     file_bytes = await file.read()
@@ -116,7 +116,7 @@ async def list_calls(
     status_filter: Optional[CallStatus] = Query(None, alias="status"),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
-    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> CallListResponse:
     filters = []
@@ -189,7 +189,7 @@ async def list_calls(
 @router.get("/{call_id}", response_model=CallOut)
 async def get_call(
     call_id: UUID,
-    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> CallOut:
     result = await db.execute(
@@ -229,7 +229,7 @@ async def get_call(
 @router.get("/{call_id}/transcript", response_model=TranscriptOut)
 async def get_call_transcript(
     call_id: UUID,
-    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> TranscriptOut:
     # Verify call access (reuse RBAC logic)
@@ -285,7 +285,7 @@ async def get_call_transcript(
 @router.get("/{call_id}/audio-url")
 async def get_call_audio_url(
     call_id: UUID,
-    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     call_result = await db.execute(
@@ -311,7 +311,7 @@ async def get_call_audio_url(
 @router.get("/{call_id}/scores", response_model=CallScoresOut)
 async def get_call_scores(
     call_id: UUID,
-    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> CallScoresOut:
     call_result = await db.execute(
@@ -383,7 +383,7 @@ async def get_call_scores(
 @router.get("/{call_id}/summary", response_model=SummaryOut)
 async def get_call_summary(
     call_id: UUID,
-    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> SummaryOut:
     call_result = await db.execute(
@@ -425,7 +425,7 @@ async def get_call_summary(
 @router.get("/{call_id}/coaching", response_model=CoachingOut)
 async def get_call_coaching(
     call_id: UUID,
-    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> CoachingOut:
     call_result = await db.execute(
@@ -464,7 +464,7 @@ async def get_call_coaching(
 async def resolve_objection(
     call_id: UUID,
     objection_id: UUID,
-    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> ObjectionOut:
     # Require MANAGER or ADMIN role

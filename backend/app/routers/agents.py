@@ -31,7 +31,7 @@ def _round_opt(value: Optional[float], ndigits: int = 1) -> Optional[float]:
 async def list_agents(
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=200),
-    current_user: User = Depends(CurrentUser),  # type: ignore[misc]
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> AgentListResponse:
     total_result = await db.execute(select(func.count()).select_from(Agent))
@@ -71,7 +71,7 @@ async def list_agents(
 async def get_agent_scorecard(
     agent_id: UUID,
     period: int = Query(30, ge=1, le=365),
-    current_user: User = Depends(CurrentUser),
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> AgentScorecardOut:
     """Return a detailed scorecard for an individual agent.

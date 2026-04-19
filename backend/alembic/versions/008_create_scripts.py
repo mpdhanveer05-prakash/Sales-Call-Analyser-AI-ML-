@@ -23,7 +23,7 @@ def upgrade() -> None:
         sa.Column("id", UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
         sa.Column("name", sa.String(200), nullable=False),
         sa.Column("content", sa.Text, nullable=False),
-        sa.Column("rubric", sa.JSON, nullable=False, server_default="'{}'"),
+        sa.Column("rubric", sa.JSON, nullable=False, server_default=sa.text("'{}'")),
         sa.Column("is_active", sa.Boolean, nullable=False, server_default="true"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),

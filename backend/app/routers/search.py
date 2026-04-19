@@ -15,7 +15,7 @@ router = APIRouter(prefix="/search", tags=["search"])
 @router.post("", response_model=list[SearchResult])
 async def search(
     body: SearchRequest,
-    current_user: User = Depends(CurrentUser),
+    current_user: CurrentUser,
     db: AsyncSession = Depends(get_db),
 ) -> list[SearchResult]:
     """Full-text search across call transcripts.

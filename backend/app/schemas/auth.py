@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from pydantic import BaseModel, EmailStr
 from app.models.user import UserRole
 
@@ -24,7 +26,7 @@ class AccessTokenResponse(BaseModel):
 
 
 class UserOut(BaseModel):
-    id: str
+    id: UUID
     email: str
     full_name: str
     role: UserRole
