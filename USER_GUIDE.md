@@ -1,4 +1,5 @@
 # Sales Call Analyzer — User Guide
+# Sales Call Analyzer — User Guide
 
 ## Table of Contents
 1. [Accessing the Application](#1-accessing-the-application)

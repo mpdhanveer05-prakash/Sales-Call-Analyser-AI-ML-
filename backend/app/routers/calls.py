@@ -31,6 +31,10 @@ class CoachingOut(BaseModel):
     coaching_clips: List[CoachingClipOut]
     objections: List[ObjectionOut]
 
+
+class BulkDeleteRequest(BaseModel):
+    call_ids: List[UUID]
+
 router = APIRouter(prefix="/calls", tags=["calls"])
 
 ALLOWED_CONTENT_TYPES = {
@@ -544,3 +548,70 @@ async def cancel_call(
         original_filename=call.original_filename,
         uploaded_at=call.uploaded_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Delete endpoints
+# ---------------------------------------------------------------------------
+
+async def _check_call_access(call: Call, current_user: User, db: AsyncSession) -> None:
+    if current_user.role == UserRole.AGENT:
+        agent_result = await db.execute(select(Agent).where(Agent.user_id == current_user.id))
+        own_agent = agent_result.scalar_one_or_none()
+        if not own_agent or call.agent_id != own_agent.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    elif current_user.role == UserRole.MANAGER and current_user.team_id:
+        if call.agent and call.agent.team_id != current_user.team_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+
+@router.delete("/{call_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_call(
+    call_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    result = await db.execute(
+        select(Call).options(selectinload(Call.agent)).where(Call.id == call_id)
+    )
+    call = result.scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+    await _check_call_access(call, current_user, db)
+    if call.audio_url:
+        storage_service.delete_audio(call.audio_url)
+    await db.delete(call)
+    await db.commit()
+
+
+@router.post("/bulk-delete", status_code=status.HTTP_200_OK)
+async def bulk_delete_calls(
+    body: BulkDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    if not body.call_ids:
+        return {"deleted": 0}
+    results = await db.execute(
+        select(Call).options(selectinload(Call.agent)).where(Call.id.in_(body.call_ids))
+    )
+    calls = results.scalars().all()
+    own_agent_id = None
+    if current_user.role == UserRole.AGENT:
+        agent_result = await db.execute(select(Agent).where(Agent.user_id == current_user.id))
+        own_agent = agent_result.scalar_one_or_none()
+        own_agent_id = own_agent.id if own_agent else None
+    deleted = 0
+    for call in calls:
+        if current_user.role == UserRole.AGENT:
+            if own_agent_id is None or call.agent_id != own_agent_id:
+                continue
+        elif current_user.role == UserRole.MANAGER and current_user.team_id:
+            if call.agent and call.agent.team_id != current_user.team_id:
+                continue
+        if call.audio_url:
+            storage_service.delete_audio(call.audio_url)
+        await db.delete(call)
+        deleted += 1
+    await db.commit()
+    return {"deleted": deleted}

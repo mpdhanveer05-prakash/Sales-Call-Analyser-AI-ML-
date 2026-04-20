@@ -62,3 +62,12 @@ export async function cancelCall(callId: string): Promise<Call> {
   const { data } = await apiClient.post<Call>(`/calls/${callId}/cancel`);
   return data;
 }
+
+export async function deleteCall(callId: string): Promise<void> {
+  await apiClient.delete(`/calls/${callId}`);
+}
+
+export async function bulkDeleteCalls(callIds: string[]): Promise<{ deleted: number }> {
+  const { data } = await apiClient.post<{ deleted: number }>("/calls/bulk-delete", { call_ids: callIds });
+  return data;
+}

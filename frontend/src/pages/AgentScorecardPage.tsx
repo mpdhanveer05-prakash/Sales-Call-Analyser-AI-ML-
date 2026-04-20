@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, TrendingUp, TrendingDown, Phone, User } from "lucide-react";
+import { ArrowLeft, TrendingUp, TrendingDown, Phone, User, Download, ChevronDown } from "lucide-react";
 import {
   LineChart,
   Line,
@@ -60,6 +60,7 @@ export default function AgentScorecardPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [period, setPeriod] = useState(30);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const { data: scorecard, isLoading, isError } = useQuery({
     queryKey: ["scorecard", id, period],
@@ -73,6 +74,41 @@ export default function AgentScorecardPage() {
     queryFn: () => fetchCalls({ agent_id: id!, limit: 5, status: "COMPLETED" }),
     enabled: !!id,
   });
+
+  function exportCSV() {
+    if (!scorecard) return;
+    const rows = [
+      ["Agent", "Period (days)", "Avg Speech", "Avg Sales", "Total Calls", "Converted"],
+      [
+        scorecard.agent_name,
+        String(period),
+        scorecard.avg_speech_score?.toFixed(1) ?? "",
+        scorecard.avg_sales_score?.toFixed(1) ?? "",
+        String(scorecard.call_count),
+        String(scorecard.disposition_breakdown["CONVERTED"] ?? 0),
+      ],
+      [],
+      ["Week", "Avg Speech", "Avg Sales", "Calls"],
+      ...scorecard.score_trend.map((p) => [p.week, p.avg_speech?.toFixed(1) ?? "", p.avg_sales?.toFixed(1) ?? "", String(p.call_count)]),
+      [],
+      ["Disposition", "Count"],
+      ...Object.entries(scorecard.disposition_breakdown).map(([k, v]) => [k, String(v)]),
+    ];
+    const csv = rows.map((r) => r.join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scorecard_${scorecard.agent_name.replace(/\s+/g, "_")}_${period}d.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setExportOpen(false);
+  }
+
+  function printScorecard() {
+    setExportOpen(false);
+    setTimeout(() => window.print(), 100);
+  }
 
   if (isLoading) {
     return <div className="flex items-center justify-center h-full text-gray-400 text-sm">Loading scorecard…</div>;
@@ -117,13 +153,41 @@ export default function AgentScorecardPage() {
             </p>
           </div>
         </div>
-        <select
-          value={period}
-          onChange={(e) => setPeriod(Number(e.target.value))}
-          className="px-3 py-2 rounded-lg border border-gray-300 text-sm bg-white focus:outline-none"
-        >
-          {PERIOD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={period}
+            onChange={(e) => setPeriod(Number(e.target.value))}
+            className="px-3 py-2 rounded-lg border border-gray-300 text-sm bg-white focus:outline-none"
+          >
+            {PERIOD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <div className="relative">
+            <button
+              onClick={() => setExportOpen((o) => !o)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              <Download size={13} />
+              Export
+              <ChevronDown size={12} className={exportOpen ? "rotate-180 transition-transform" : "transition-transform"} />
+            </button>
+            {exportOpen && (
+              <div className="absolute right-0 top-full mt-1 w-44 bg-white border border-gray-200 rounded-lg shadow-lg z-10 py-1">
+                <button
+                  onClick={exportCSV}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  Export CSV
+                </button>
+                <button
+                  onClick={printScorecard}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  Print scorecard
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Score heroes */}

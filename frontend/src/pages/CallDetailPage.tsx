@@ -1,10 +1,10 @@
 import { useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Clock, FileText, BarChart2, MessageSquare, Lightbulb } from "lucide-react";
+import { ArrowLeft, Clock, FileText, BarChart2, MessageSquare, Lightbulb, Trash2, Download, ChevronDown } from "lucide-react";
 import { format } from "date-fns";
 
-import { fetchCall, fetchTranscript, fetchAudioUrl, fetchScores, fetchSummary, fetchCoaching } from "@/api/calls";
+import { fetchCall, fetchTranscript, fetchAudioUrl, fetchScores, fetchSummary, fetchCoaching, deleteCall } from "@/api/calls";
 import { StatusBadge } from "@/components/ui/badge";
 import AudioPlayer, { type AudioPlayerHandle } from "@/components/calls/AudioPlayer";
 import TranscriptViewer from "@/components/calls/TranscriptViewer";
@@ -31,7 +31,81 @@ export default function CallDetailPage() {
 
   const [activeTab, setActiveTab] = useState<Tab>("transcript");
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [exportOpen, setExportOpen] = useState(false);
   const playerRef = useRef<AudioPlayerHandle>(null);
+
+  async function handleDelete() {
+    if (!window.confirm("Delete this call? This cannot be undone.")) return;
+    try {
+      await deleteCall(id!);
+      navigate("/calls");
+    } catch {
+      alert("Failed to delete call. Please try again.");
+    }
+  }
+
+  function exportTranscript() {
+    if (!transcript || !call) return;
+    const lines = transcript.segments.map(
+      (s) => `[${s.speaker}] ${Math.floor(s.start_ms / 1000)}s: ${s.text}`
+    );
+    const header = `Call: ${call.original_filename}\nAgent: ${call.agent_name}\nDate: ${format(new Date(call.call_date), "dd MMM yyyy")}\n\n`;
+    const blob = new Blob([header + lines.join("\n")], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `transcript_${id}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setExportOpen(false);
+  }
+
+  function exportScoresCSV() {
+    if (!scores || !call) return;
+    const rows: string[][] = [["Category", "Dimension", "Score"]];
+    if (scores.speech) {
+      const s = scores.speech;
+      [
+        ["Speech", "Pronunciation", s.pronunciation],
+        ["Speech", "Intonation", s.intonation],
+        ["Speech", "Fluency", s.fluency],
+        ["Speech", "Grammar", s.grammar],
+        ["Speech", "Vocabulary", s.vocabulary],
+        ["Speech", "Pace", s.pace],
+        ["Speech", "Clarity", s.clarity],
+        ["Speech", "Filler Score", s.filler_score],
+        ["Speech", "Composite", s.composite],
+      ].forEach(([cat, dim, val]) => rows.push([String(cat), String(dim), String(Number(val).toFixed(1))]));
+    }
+    if (scores.sales) {
+      const s = scores.sales;
+      [
+        ["Sales", "Greeting", s.greeting],
+        ["Sales", "Rapport", s.rapport],
+        ["Sales", "Discovery", s.discovery],
+        ["Sales", "Value Explanation", s.value_explanation],
+        ["Sales", "Objection Handling", s.objection_handling],
+        ["Sales", "Script Adherence", s.script_adherence],
+        ["Sales", "Closing", s.closing],
+        ["Sales", "Compliance", s.compliance],
+        ["Sales", "Composite", s.composite],
+      ].forEach(([cat, dim, val]) => rows.push([String(cat), String(dim), String(Number(val).toFixed(1))]));
+    }
+    const csv = rows.map((r) => r.join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scores_${id}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setExportOpen(false);
+  }
+
+  function printReport() {
+    setExportOpen(false);
+    setTimeout(() => window.print(), 100);
+  }
 
   const { data: call, isLoading: callLoading } = useQuery({
     queryKey: ["call", id],
@@ -117,7 +191,52 @@ export default function CallDetailPage() {
             {call.agent_name} · {format(new Date(call.call_date), "dd MMM yyyy")}
           </p>
         </div>
-        <StatusBadge status={call.status as CallStatus} />
+        <div className="flex items-center gap-2">
+          <StatusBadge status={call.status as CallStatus} />
+          {/* Export dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setExportOpen((o) => !o)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              <Download size={13} />
+              Export
+              <ChevronDown size={12} className={exportOpen ? "rotate-180 transition-transform" : "transition-transform"} />
+            </button>
+            {exportOpen && (
+              <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10 py-1">
+                <button
+                  onClick={exportTranscript}
+                  disabled={!transcript}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed transition-colors"
+                >
+                  Transcript (.txt)
+                </button>
+                <button
+                  onClick={exportScoresCSV}
+                  disabled={!scores?.speech && !scores?.sales}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed transition-colors"
+                >
+                  Scores (.csv)
+                </button>
+                <button
+                  onClick={printReport}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  Print report
+                </button>
+              </div>
+            )}
+          </div>
+          {/* Delete */}
+          <button
+            onClick={handleDelete}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 text-sm text-red-600 hover:bg-red-50 transition-colors"
+          >
+            <Trash2 size={13} />
+            Delete
+          </button>
+        </div>
       </div>
 
       {/* Metadata cards */}

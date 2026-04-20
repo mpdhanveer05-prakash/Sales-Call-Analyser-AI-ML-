@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { format } from "date-fns";
-import { RefreshCw, Upload, Search, XCircle } from "lucide-react";
+import { RefreshCw, Upload, Search, XCircle, Trash2 } from "lucide-react";
 import { useCalls } from "@/hooks/useCalls";
 import { useAgents } from "@/hooks/useAgents";
 import { StatusBadge } from "@/components/ui/badge";
 import DispositionBadge from "@/components/calls/DispositionBadge";
-import { cancelCall } from "@/api/calls";
+import { cancelCall, deleteCall, bulkDeleteCalls } from "@/api/calls";
 import { useQueryClient } from "@tanstack/react-query";
 import type { CallStatus } from "@/types";
 
@@ -22,7 +22,7 @@ function ProcessingBar({ callId, status, onCancel }: { callId: string; status: s
   if (!stage) return null;
   return (
     <tr>
-      <td colSpan={8} className="px-5 pb-2.5 pt-0">
+      <td colSpan={9} className="px-5 pb-2.5 pt-0">
         <div className="flex items-center gap-3">
           <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
             <div
@@ -76,6 +76,8 @@ export default function CallsListPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [cancelling, setCancelling] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const { data: agents = [] } = useAgents();
   const { data, isLoading, isFetching, refetch } = useCalls({
@@ -91,6 +93,25 @@ export default function CallsListPage() {
   const total = data?.total ?? 0;
   const pages = data?.pages ?? 0;
 
+  const allSelected = calls.length > 0 && calls.every((c) => selectedIds.has(c.id));
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(calls.map((c) => c.id)));
+    }
+  }
+
   async function handleCancel(callId: string) {
     if (cancelling) return;
     setCancelling(callId);
@@ -99,6 +120,33 @@ export default function CallsListPage() {
       queryClient.invalidateQueries({ queryKey: ["calls"] });
     } finally {
       setCancelling(null);
+    }
+  }
+
+  async function handleDeleteOne(callId: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!window.confirm("Delete this call? This cannot be undone.")) return;
+    try {
+      await deleteCall(callId);
+      setSelectedIds((prev) => { const next = new Set(prev); next.delete(callId); return next; });
+      queryClient.invalidateQueries({ queryKey: ["calls"] });
+    } catch {
+      alert("Failed to delete call. Please try again.");
+    }
+  }
+
+  async function handleBulkDelete() {
+    const ids = Array.from(selectedIds);
+    if (!window.confirm(`Delete ${ids.length} selected call(s)? This cannot be undone.`)) return;
+    setBulkDeleting(true);
+    try {
+      await bulkDeleteCalls(ids);
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ["calls"] });
+    } catch {
+      alert("Bulk delete failed. Please try again.");
+    } finally {
+      setBulkDeleting(false);
     }
   }
 
@@ -177,6 +225,27 @@ export default function CallsListPage() {
         )}
       </div>
 
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 mb-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-lg">
+          <span className="text-sm font-medium text-red-700">{selectedIds.size} selected</span>
+          <button
+            onClick={handleBulkDelete}
+            disabled={bulkDeleting}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-medium transition-colors disabled:opacity-50"
+          >
+            <Trash2 size={12} />
+            {bulkDeleting ? "Deleting…" : `Delete ${selectedIds.size} call${selectedIds.size !== 1 ? "s" : ""}`}
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="text-xs text-red-500 hover:text-red-700 transition-colors ml-auto"
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         {isLoading ? (
@@ -193,6 +262,14 @@ export default function CallsListPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
+                <th className="px-4 py-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleSelectAll}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-brand-600 cursor-pointer"
+                  />
+                </th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Date</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Agent</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">File</th>
@@ -201,6 +278,7 @@ export default function CallsListPage() {
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Disposition</th>
                 <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Speech</th>
                 <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Sales</th>
+                <th className="w-10 px-3 py-3"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -209,8 +287,16 @@ export default function CallsListPage() {
                 <tr
                   key={call.id}
                   onClick={() => navigate(`/calls/${call.id}`)}
-                  className="hover:bg-gray-50 cursor-pointer transition-colors"
+                  className="hover:bg-gray-50 cursor-pointer transition-colors group"
                 >
+                  <td className="px-4 py-3.5" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(call.id)}
+                      onChange={() => toggleSelect(call.id)}
+                      className="w-3.5 h-3.5 rounded border-gray-300 text-brand-600 cursor-pointer"
+                    />
+                  </td>
                   <td className="px-5 py-3.5 text-gray-700 whitespace-nowrap">
                     {format(new Date(call.call_date), "dd MMM yyyy")}
                   </td>
@@ -254,6 +340,15 @@ export default function CallsListPage() {
                         {formatScore(call.sales_score)}
                       </span>
                     ) : <span className="text-gray-400">—</span>}
+                  </td>
+                  <td className="px-3 py-3.5">
+                    <button
+                      onClick={(e) => handleDeleteOne(call.id, e)}
+                      title="Delete call"
+                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-all"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </td>
                 </tr>
                 {STAGE_PROGRESS[call.status] && <ProcessingBar key={`bar-${call.id}`} callId={call.id} status={call.status} onCancel={handleCancel} />}

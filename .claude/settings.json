@@ -6,7 +6,10 @@
       "Bash(docker stats *)",
       "Read(//c/Users/dhanveerp/**)",
       "Bash(wmic computersystem *)",
-      "Bash(powershell -command \"\\(Get-CimInstance Win32_ComputerSystem\\).TotalPhysicalMemory / 1GB\")"
+      "Bash(powershell -command \"\\(Get-CimInstance Win32_ComputerSystem\\).TotalPhysicalMemory / 1GB\")",
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(node_modules/.bin/tsc --noEmit)"
     ],
     "additionalDirectories": [
       "C:\\Users\\dhanveerp"
