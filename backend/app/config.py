@@ -34,8 +34,8 @@ class Settings(BaseSettings):
 
     # Ollama
     ollama_url: str = "http://localhost:11434"
-    ollama_default_model: str = "llama3.1:8b"
-    ollama_timeout_seconds: int = 120
+    ollama_default_model: str = "llama3.2:1b"
+    ollama_timeout_seconds: int = 300
 
     # ML Service
     ml_service_url: str = "http://localhost:8001"
@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     max_upload_size_mb: int = 500
-    allowed_audio_extensions: str = ".wav,.mp3,.m4a,.ogg,.flac"
+    allowed_audio_extensions: str = ".wav,.mp3,.m4a,.mp4,.ogg,.flac"
 
     # Seed credentials
     seed_admin_email: str = "admin@company.com"

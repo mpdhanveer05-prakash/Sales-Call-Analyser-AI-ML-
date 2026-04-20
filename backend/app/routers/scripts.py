@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import CurrentUser
+from app.dependencies import get_current_user
 from app.models.script import Script
 from app.models.user import User, UserRole
 from app.schemas.script import ScriptCreate, ScriptOut, ScriptUpdate
@@ -21,7 +21,7 @@ def _require_manager(user: User) -> None:
 @router.get("", response_model=list[ScriptOut])
 async def list_scripts(
     active_only: bool = True,
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ScriptOut]:
     stmt = select(Script)
@@ -34,7 +34,7 @@ async def list_scripts(
 @router.get("/{script_id}", response_model=ScriptOut)
 async def get_script(
     script_id: UUID,
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ScriptOut:
     result = await db.execute(select(Script).where(Script.id == script_id))
@@ -47,7 +47,7 @@ async def get_script(
 @router.post("", response_model=ScriptOut, status_code=status.HTTP_201_CREATED)
 async def create_script(
     body: ScriptCreate,
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ScriptOut:
     _require_manager(current_user)
@@ -67,7 +67,7 @@ async def create_script(
 async def update_script(
     script_id: UUID,
     body: ScriptUpdate,
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ScriptOut:
     _require_manager(current_user)

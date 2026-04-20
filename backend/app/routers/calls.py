@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
 
 from app.database import get_db
-from app.dependencies import CurrentUser
+from app.dependencies import get_current_user
 from app.models.call import Call, CallStatus
 from app.models.agent import Agent
 from app.models.coaching import CoachingClip, Objection
@@ -37,6 +37,7 @@ ALLOWED_CONTENT_TYPES = {
     "audio/wav", "audio/wave", "audio/x-wav",
     "audio/mpeg", "audio/mp3",
     "audio/mp4", "audio/x-m4a",
+    "video/mp4",
     "audio/ogg", "audio/vorbis",
     "audio/flac", "audio/x-flac",
     "application/octet-stream",
@@ -62,7 +63,7 @@ async def upload_call(
     file: UploadFile = File(...),
     agent_id: UUID = Form(...),
     call_date: date = Form(...),
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CallUploadResponse:
     file_bytes = await file.read()
@@ -116,7 +117,7 @@ async def list_calls(
     status_filter: Optional[CallStatus] = Query(None, alias="status"),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CallListResponse:
     filters = []
@@ -189,7 +190,7 @@ async def list_calls(
 @router.get("/{call_id}", response_model=CallOut)
 async def get_call(
     call_id: UUID,
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CallOut:
     result = await db.execute(
@@ -229,7 +230,7 @@ async def get_call(
 @router.get("/{call_id}/transcript", response_model=TranscriptOut)
 async def get_call_transcript(
     call_id: UUID,
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TranscriptOut:
     # Verify call access (reuse RBAC logic)
@@ -285,7 +286,7 @@ async def get_call_transcript(
 @router.get("/{call_id}/audio-url")
 async def get_call_audio_url(
     call_id: UUID,
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     call_result = await db.execute(
@@ -311,7 +312,7 @@ async def get_call_audio_url(
 @router.get("/{call_id}/scores", response_model=CallScoresOut)
 async def get_call_scores(
     call_id: UUID,
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CallScoresOut:
     call_result = await db.execute(
@@ -383,7 +384,7 @@ async def get_call_scores(
 @router.get("/{call_id}/summary", response_model=SummaryOut)
 async def get_call_summary(
     call_id: UUID,
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> SummaryOut:
     call_result = await db.execute(
@@ -425,7 +426,7 @@ async def get_call_summary(
 @router.get("/{call_id}/coaching", response_model=CoachingOut)
 async def get_call_coaching(
     call_id: UUID,
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CoachingOut:
     call_result = await db.execute(
@@ -464,7 +465,7 @@ async def get_call_coaching(
 async def resolve_objection(
     call_id: UUID,
     objection_id: UUID,
-    current_user: CurrentUser,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ObjectionOut:
     # Require MANAGER or ADMIN role
@@ -496,3 +497,50 @@ async def resolve_objection(
     await db.refresh(objection)
 
     return ObjectionOut.model_validate(objection)
+
+
+CANCELLABLE_STATUSES = {CallStatus.QUEUED, CallStatus.TRANSCRIBING, CallStatus.ANALYZING, CallStatus.SCORING}
+
+
+@router.post("/{call_id}/cancel", response_model=CallOut)
+async def cancel_call(
+    call_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CallOut:
+    result = await db.execute(
+        select(Call).options(selectinload(Call.agent).selectinload(Agent.user)).where(Call.id == call_id)
+    )
+    call = result.scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+
+    if current_user.role == UserRole.AGENT:
+        agent_result = await db.execute(select(Agent).where(Agent.user_id == current_user.id))
+        own_agent = agent_result.scalar_one_or_none()
+        if not own_agent or call.agent_id != own_agent.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if call.status not in CANCELLABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot cancel a call with status '{call.status.value}'",
+        )
+
+    call.status = CallStatus.CANCELLED
+    await db.commit()
+    await db.refresh(call)
+
+    return CallOut(
+        id=call.id,
+        agent_id=call.agent_id,
+        agent_name=call.agent.user.full_name if call.agent and call.agent.user else "Unknown",
+        call_date=call.call_date,
+        duration_seconds=call.duration_seconds,
+        status=call.status,
+        disposition=call.disposition,
+        speech_score=float(call.speech_score) if call.speech_score else None,
+        sales_score=float(call.sales_score) if call.sales_score else None,
+        original_filename=call.original_filename,
+        uploaded_at=call.uploaded_at,
+    )

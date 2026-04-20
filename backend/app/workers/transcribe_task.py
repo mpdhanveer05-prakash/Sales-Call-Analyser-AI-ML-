@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from uuid import UUID
 
@@ -6,7 +5,7 @@ import httpx
 from sqlalchemy import select
 
 from app.config import settings
-from app.database import AsyncSessionLocal
+from app.database import SyncSessionLocal
 from app.models.call import Call, CallStatus
 from app.models.transcript import Transcript, TranscriptSegment
 from app.workers.celery_app import celery_app
@@ -14,40 +13,42 @@ from app.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Async DB helpers
-# ---------------------------------------------------------------------------
-
-async def _get_call(call_id: str) -> Call | None:
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Call).where(Call.id == UUID(call_id)))
+def _get_call(call_id: str) -> Call | None:
+    with SyncSessionLocal() as db:
+        result = db.execute(select(Call).where(Call.id == UUID(call_id)))
         return result.scalar_one_or_none()
 
 
-async def _update_call_status(call_id: str, status: CallStatus, error: str | None = None) -> None:
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Call).where(Call.id == UUID(call_id)))
+def _is_cancelled(call_id: str) -> bool:
+    with SyncSessionLocal() as db:
+        result = db.execute(select(Call.status).where(Call.id == UUID(call_id)))
+        status = result.scalar_one_or_none()
+        return status == CallStatus.CANCELLED
+
+
+def _update_call_status(call_id: str, status: CallStatus, error: str | None = None) -> None:
+    with SyncSessionLocal() as db:
+        result = db.execute(select(Call).where(Call.id == UUID(call_id)))
         call = result.scalar_one_or_none()
         if call:
             call.status = status
             if error:
                 call.error_message = error
-            await db.commit()
+            db.commit()
 
 
-async def _save_transcript(
+def _save_transcript(
     call_id: str,
     language: str,
     duration_seconds: float,
     segments_data: list[dict],
 ) -> None:
-    async with AsyncSessionLocal() as db:
-        # Remove any existing transcript for this call (idempotent re-run)
-        result = await db.execute(select(Transcript).where(Transcript.call_id == UUID(call_id)))
+    with SyncSessionLocal() as db:
+        result = db.execute(select(Transcript).where(Transcript.call_id == UUID(call_id)))
         existing = result.scalar_one_or_none()
         if existing:
-            await db.delete(existing)
-            await db.flush()
+            db.delete(existing)
+            db.flush()
 
         transcript = Transcript(
             call_id=UUID(call_id),
@@ -56,7 +57,7 @@ async def _save_transcript(
             segment_count=len(segments_data),
         )
         db.add(transcript)
-        await db.flush()  # populate transcript.id
+        db.flush()
 
         for seg in segments_data:
             db.add(TranscriptSegment(
@@ -68,32 +69,30 @@ async def _save_transcript(
                 confidence=seg.get("confidence"),
             ))
 
-        # Update call duration from transcript if not already set
-        call_result = await db.execute(select(Call).where(Call.id == UUID(call_id)))
+        call_result = db.execute(select(Call).where(Call.id == UUID(call_id)))
         call = call_result.scalar_one_or_none()
         if call and call.duration_seconds is None and duration_seconds:
             call.duration_seconds = int(duration_seconds)
 
-        await db.commit()
+        db.commit()
         logger.info("Saved %d transcript segments for call %s", len(segments_data), call_id)
 
-
-# ---------------------------------------------------------------------------
-# Celery task
-# ---------------------------------------------------------------------------
 
 @celery_app.task(name="transcribe_call", bind=True, max_retries=3)
 def transcribe_call_task(self, call_id: str) -> dict:
     logger.info("Starting transcription for call %s", call_id)
 
     try:
-        asyncio.run(_update_call_status(call_id, CallStatus.TRANSCRIBING))
+        if _is_cancelled(call_id):
+            logger.info("Call %s is cancelled — skipping transcription", call_id)
+            return {"call_id": call_id, "skipped": "cancelled"}
 
-        call = asyncio.run(_get_call(call_id))
+        _update_call_status(call_id, CallStatus.TRANSCRIBING)
+
+        call = _get_call(call_id)
         if not call:
             raise ValueError(f"Call {call_id} not found in database")
 
-        # POST to ML service
         payload = {"minio_path": call.audio_url}
         with httpx.Client(timeout=600.0) as client:
             response = client.post(
@@ -107,23 +106,25 @@ def transcribe_call_task(self, call_id: str) -> dict:
         language = result["language"]
         duration_seconds = result["duration_seconds"]
 
-        asyncio.run(_save_transcript(call_id, language, duration_seconds, segments))
-        asyncio.run(_update_call_status(call_id, CallStatus.ANALYZING))
+        _save_transcript(call_id, language, duration_seconds, segments)
+        _update_call_status(call_id, CallStatus.ANALYZING)
 
-        # Chain into speech scoring
         from app.workers.speech_score_task import speech_score_task
         speech_score_task.delay(call_id)
 
-        logger.info("Transcription complete for call %s: %d segments, lang=%s — dispatched speech scoring", call_id, len(segments), language)
+        logger.info(
+            "Transcription complete for call %s: %d segments, lang=%s — dispatched speech scoring",
+            call_id, len(segments), language,
+        )
         return {"call_id": call_id, "segment_count": len(segments), "language": language}
 
     except httpx.HTTPStatusError as exc:
         error_msg = f"ML service error: {exc.response.status_code} — {exc.response.text[:200]}"
         logger.error(error_msg)
-        asyncio.run(_update_call_status(call_id, CallStatus.FAILED, error_msg))
+        _update_call_status(call_id, CallStatus.FAILED, error_msg)
         raise self.retry(exc=exc, countdown=60)
 
     except Exception as exc:
         logger.error("Transcription failed for call %s: %s", call_id, exc)
-        asyncio.run(_update_call_status(call_id, CallStatus.FAILED, str(exc)))
+        _update_call_status(call_id, CallStatus.FAILED, str(exc))
         raise self.retry(exc=exc, countdown=60)

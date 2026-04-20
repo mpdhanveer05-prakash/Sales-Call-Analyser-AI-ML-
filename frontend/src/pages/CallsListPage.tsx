@@ -1,12 +1,49 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { format } from "date-fns";
-import { RefreshCw, Upload, Search } from "lucide-react";
+import { RefreshCw, Upload, Search, XCircle } from "lucide-react";
 import { useCalls } from "@/hooks/useCalls";
 import { useAgents } from "@/hooks/useAgents";
 import { StatusBadge } from "@/components/ui/badge";
 import DispositionBadge from "@/components/calls/DispositionBadge";
+import { cancelCall } from "@/api/calls";
+import { useQueryClient } from "@tanstack/react-query";
 import type { CallStatus } from "@/types";
+
+const STAGE_PROGRESS: Record<string, { pct: number; label: string; color: string }> = {
+  QUEUED:       { pct: 8,   label: "Queued — waiting to start",        color: "bg-gray-400" },
+  TRANSCRIBING: { pct: 30,  label: "Transcribing audio…",              color: "bg-blue-500" },
+  ANALYZING:    { pct: 60,  label: "Analyzing speech features…",       color: "bg-indigo-500" },
+  SCORING:      { pct: 85,  label: "Scoring with AI…",                 color: "bg-violet-500" },
+};
+
+function ProcessingBar({ callId, status, onCancel }: { callId: string; status: string; onCancel: (id: string) => void }) {
+  const stage = STAGE_PROGRESS[status];
+  if (!stage) return null;
+  return (
+    <tr>
+      <td colSpan={8} className="px-5 pb-2.5 pt-0">
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-1000 ${stage.color} ${status !== "QUEUED" ? "animate-pulse" : ""}`}
+              style={{ width: `${stage.pct}%` }}
+            />
+          </div>
+          <span className="text-xs text-gray-400 whitespace-nowrap">{stage.pct}% · {stage.label}</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); onCancel(callId); }}
+            title="Cancel processing"
+            className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-0.5 rounded transition-colors whitespace-nowrap"
+          >
+            <XCircle size={12} />
+            Stop
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
 
 const STATUS_OPTIONS: { label: string; value: string }[] = [
   { label: "All statuses", value: "" },
@@ -32,11 +69,13 @@ function formatScore(score: number | null): string {
 
 export default function CallsListPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [agentId, setAgentId] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [cancelling, setCancelling] = useState<string | null>(null);
 
   const { data: agents = [] } = useAgents();
   const { data, isLoading, isFetching, refetch } = useCalls({
@@ -51,6 +90,17 @@ export default function CallsListPage() {
   const calls = data?.data ?? [];
   const total = data?.total ?? 0;
   const pages = data?.pages ?? 0;
+
+  async function handleCancel(callId: string) {
+    if (cancelling) return;
+    setCancelling(callId);
+    try {
+      await cancelCall(callId);
+      queryClient.invalidateQueries({ queryKey: ["calls"] });
+    } finally {
+      setCancelling(null);
+    }
+  }
 
   return (
     <div className="p-8">
@@ -155,6 +205,7 @@ export default function CallsListPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {calls.map((call) => (
+                <>
                 <tr
                   key={call.id}
                   onClick={() => navigate(`/calls/${call.id}`)}
@@ -205,6 +256,8 @@ export default function CallsListPage() {
                     ) : <span className="text-gray-400">—</span>}
                   </td>
                 </tr>
+                {STAGE_PROGRESS[call.status] && <ProcessingBar key={`bar-${call.id}`} callId={call.id} status={call.status} onCancel={handleCancel} />}
+                </>
               ))}
             </tbody>
           </table>

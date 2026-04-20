@@ -5,7 +5,12 @@ celery_app = Celery(
     "sca_worker",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.workers.process_call_task"],
+    include=[
+        "app.workers.process_call_task",
+        "app.workers.transcribe_task",
+        "app.workers.speech_score_task",
+        "app.workers.sales_score_task",
+    ],
 )
 
 celery_app.conf.update(

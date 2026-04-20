@@ -45,7 +45,7 @@ SALES_WEIGHTS: dict[str, float] = {
 # Transcript formatter
 # ---------------------------------------------------------------------------
 
-def format_transcript(segments: list[dict], max_words: int = 6000) -> str:
+def format_transcript(segments: list[dict], max_words: int = 1500) -> str:
     lines: list[str] = []
     word_count = 0
     for seg in segments:
@@ -88,7 +88,7 @@ def _call_ollama(prompt: str, system: str, max_retries: int = 3) -> dict:
         "system": system,
         "format": "json",
         "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 2048, "seed": 42},
+        "options": {"temperature": 0.1, "num_predict": 600, "seed": 42},
     }
     last_exc: Exception = RuntimeError("No attempts made")
     for attempt in range(max_retries):
@@ -326,7 +326,7 @@ def extract_coaching_moments(segments: list[dict]) -> list[dict]:
         return []
 
     try:
-        transcript = _format_transcript_with_timestamps(segments, max_words=3000)
+        transcript = _format_transcript_with_timestamps(segments, max_words=1000)
         categories_str = ", ".join(COACHING_CATEGORIES)
         prompt = _COACHING_PROMPT_TEMPLATE.format(
             transcript=transcript,
@@ -415,7 +415,7 @@ def extract_objections(segments: list[dict]) -> list[dict]:
         return []
 
     try:
-        transcript = _format_transcript_with_timestamps(segments, max_words=3000)
+        transcript = _format_transcript_with_timestamps(segments, max_words=1000)
         types_str = ", ".join(OBJECTION_TYPES)
         prompt = _OBJECTION_PROMPT_TEMPLATE.format(
             transcript=transcript,

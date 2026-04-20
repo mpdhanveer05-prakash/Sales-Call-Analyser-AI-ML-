@@ -57,3 +57,8 @@ export async function resolveObjection(callId: string, objectionId: string): Pro
   const { data } = await apiClient.post(`/calls/${callId}/objections/${objectionId}/resolve`);
   return data;
 }
+
+export async function cancelCall(callId: string): Promise<Call> {
+  const { data } = await apiClient.post<Call>(`/calls/${callId}/cancel`);
+  return data;
+}

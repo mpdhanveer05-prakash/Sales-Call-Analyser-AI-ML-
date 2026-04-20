@@ -37,7 +37,7 @@ class SpeechScore(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    call: Mapped["Call"] = relationship("Call", back_populates="speech_score")
+    call: Mapped["Call"] = relationship("Call", back_populates="speech_score_rel")
 
 
 class SalesScore(Base):
@@ -63,4 +63,4 @@ class SalesScore(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    call: Mapped["Call"] = relationship("Call", back_populates="sales_score")
+    call: Mapped["Call"] = relationship("Call", back_populates="sales_score_rel")

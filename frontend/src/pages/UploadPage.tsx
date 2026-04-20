@@ -10,7 +10,7 @@ import { useAgents } from "@/hooks/useAgents";
 import { useAuthStore } from "@/store/authStore";
 import { cn } from "@/lib/utils";
 
-const ALLOWED_EXTS = [".wav", ".mp3", ".m4a", ".ogg", ".flac"];
+const ALLOWED_EXTS = [".wav", ".mp3", ".m4a", ".mp4", ".ogg", ".flac"];
 const MAX_SIZE_MB = 500;
 
 const schema = z.object({

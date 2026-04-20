@@ -26,6 +26,7 @@ class CallStatus(str, enum.Enum):
     SCORING = "SCORING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class Call(Base):
@@ -52,8 +53,8 @@ class Call(Base):
     agent: Mapped["Agent"] = relationship("Agent", back_populates="calls")
     uploader: Mapped["User"] = relationship("User", foreign_keys=[uploaded_by])
     transcript: Mapped[Optional["Transcript"]] = relationship("Transcript", back_populates="call", uselist=False)
-    speech_score: Mapped[Optional["SpeechScore"]] = relationship("SpeechScore", back_populates="call", uselist=False)
-    sales_score: Mapped[Optional["SalesScore"]] = relationship("SalesScore", back_populates="call", uselist=False)
+    speech_score_rel: Mapped[Optional["SpeechScore"]] = relationship("SpeechScore", back_populates="call", uselist=False)
+    sales_score_rel: Mapped[Optional["SalesScore"]] = relationship("SalesScore", back_populates="call", uselist=False)
     summary: Mapped[Optional["Summary"]] = relationship("Summary", back_populates="call", uselist=False)
     coaching_clips: Mapped[list["CoachingClip"]] = relationship("CoachingClip", back_populates="call", cascade="all, delete-orphan")
     objections: Mapped[list["Objection"]] = relationship("Objection", back_populates="call", cascade="all, delete-orphan")

@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker build *)",
+      "Bash(docker version *)",
+      "Bash(docker stats *)",
+      "Read(//c/Users/dhanveerp/**)",
+      "Bash(wmic computersystem *)",
+      "Bash(powershell -command \"\\(Get-CimInstance Win32_ComputerSystem\\).TotalPhysicalMemory / 1GB\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\dhanveerp"
+    ]
+  }
+}

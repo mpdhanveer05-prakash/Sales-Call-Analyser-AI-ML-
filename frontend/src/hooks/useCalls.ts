@@ -11,7 +11,7 @@ export function useCalls(filters: CallFilters = {}) {
     refetchInterval: (query) => {
       const calls = query.state.data?.data ?? [];
       const hasActive = calls.some((c) => PROCESSING_STATUSES.includes(c.status));
-      return hasActive ? 15_000 : false;
+      return hasActive ? 5_000 : false;
     },
   });
 
