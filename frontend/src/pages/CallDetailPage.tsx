@@ -1,7 +1,7 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Clock, FileText, BarChart2, MessageSquare, Lightbulb, Trash2, Download, ChevronDown } from "lucide-react";
+import { ArrowLeft, Clock, FileText, BarChart2, MessageSquare, Lightbulb, Trash2, Download, ChevronDown, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 
 import { fetchCall, fetchTranscript, fetchAudioUrl, fetchScores, fetchSummary, fetchCoaching, deleteCall } from "@/api/calls";
@@ -13,6 +13,7 @@ import SalesScoreRadar from "@/components/calls/SalesScoreRadar";
 import SummaryCard from "@/components/calls/SummaryCard";
 import DispositionBadge from "@/components/calls/DispositionBadge";
 import CoachingTab from "@/components/calls/CoachingTab";
+import { toast } from "@/store/toastStore";
 import type { CallStatus } from "@/types";
 import { clsx } from "clsx";
 
@@ -25,6 +26,8 @@ const TABS: { id: Tab; label: string; icon: typeof FileText }[] = [
   { id: "coaching", label: "Coaching", icon: Lightbulb },
 ];
 
+const PROCESSING_STATUSES = new Set(["QUEUED", "TRANSCRIBING", "ANALYZING", "SCORING"]);
+
 export default function CallDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -33,6 +36,82 @@ export default function CallDetailPage() {
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [exportOpen, setExportOpen] = useState(false);
   const playerRef = useRef<AudioPlayerHandle>(null);
+  const prevStatusRef = useRef<string | undefined>(undefined);
+
+  const { data: call, isLoading: callLoading } = useQuery({
+    queryKey: ["call", id],
+    queryFn: () => fetchCall(id!),
+    enabled: !!id,
+    refetchInterval: (query) => {
+      const s = query.state.data?.status;
+      return s && PROCESSING_STATUSES.has(s) ? 5_000 : false;
+    },
+  });
+
+  // Fire toasts on status transitions
+  useEffect(() => {
+    if (!call?.status) return;
+    const prev = prevStatusRef.current;
+    const curr = call.status;
+    if (prev !== undefined && prev !== curr) {
+      if (curr === "ANALYZING") {
+        toast.success("Transcript is ready! Analyzing speech now…");
+      } else if (curr === "SCORING") {
+        toast.info("Speech analysis complete — scoring with AI…");
+      } else if (curr === "COMPLETED") {
+        toast.success("All scores are ready!");
+      } else if (curr === "FAILED") {
+        toast.error("Processing failed for this call.");
+      } else if (curr === "CANCELLED") {
+        toast.warning("Processing was cancelled.");
+      }
+    }
+    prevStatusRef.current = curr;
+  }, [call?.status]);
+
+  const isCompleted = call?.status === "COMPLETED";
+  // Transcript is available as soon as transcription finishes (status moves to ANALYZING or beyond)
+  const transcriptAvailable = !!call && !["QUEUED", "TRANSCRIBING"].includes(call.status);
+
+  const { data: transcript, isLoading: transcriptLoading } = useQuery({
+    queryKey: ["transcript", id],
+    queryFn: () => fetchTranscript(id!),
+    enabled: !!id && transcriptAvailable,
+    retry: 2,
+    retryDelay: 3000,
+  });
+
+  const { data: audioUrl } = useQuery({
+    queryKey: ["audio-url", id],
+    queryFn: () => fetchAudioUrl(id!),
+    enabled: !!id && isCompleted,
+    staleTime: 90 * 60 * 1000,
+  });
+
+  const { data: scores } = useQuery({
+    queryKey: ["scores", id],
+    queryFn: () => fetchScores(id!),
+    enabled: !!id && isCompleted,
+    retry: false,
+  });
+
+  const { data: summary } = useQuery({
+    queryKey: ["summary", id],
+    queryFn: () => fetchSummary(id!),
+    enabled: !!id && isCompleted,
+    retry: false,
+  });
+
+  const { data: coaching } = useQuery({
+    queryKey: ["coaching", id],
+    queryFn: () => fetchCoaching(id!),
+    enabled: !!id && isCompleted,
+    retry: false,
+  });
+
+  const handleSeek = (ms: number) => {
+    playerRef.current?.seekTo(ms);
+  };
 
   async function handleDelete() {
     if (!window.confirm("Delete this call? This cannot be undone.")) return;
@@ -65,31 +144,35 @@ export default function CallDetailPage() {
     const rows: string[][] = [["Category", "Dimension", "Score"]];
     if (scores.speech) {
       const s = scores.speech;
-      [
-        ["Speech", "Pronunciation", s.pronunciation],
-        ["Speech", "Intonation", s.intonation],
-        ["Speech", "Fluency", s.fluency],
-        ["Speech", "Grammar", s.grammar],
-        ["Speech", "Vocabulary", s.vocabulary],
-        ["Speech", "Pace", s.pace],
-        ["Speech", "Clarity", s.clarity],
-        ["Speech", "Filler Score", s.filler_score],
-        ["Speech", "Composite", s.composite],
-      ].forEach(([cat, dim, val]) => rows.push([String(cat), String(dim), String(Number(val).toFixed(1))]));
+      (
+        [
+          ["Speech", "Pronunciation", s.pronunciation],
+          ["Speech", "Intonation", s.intonation],
+          ["Speech", "Fluency", s.fluency],
+          ["Speech", "Grammar", s.grammar],
+          ["Speech", "Vocabulary", s.vocabulary],
+          ["Speech", "Pace", s.pace],
+          ["Speech", "Clarity", s.clarity],
+          ["Speech", "Filler Score", s.filler_score],
+          ["Speech", "Composite", s.composite],
+        ] as [string, string, number][]
+      ).forEach(([cat, dim, val]) => rows.push([cat, dim, Number(val).toFixed(1)]));
     }
     if (scores.sales) {
       const s = scores.sales;
-      [
-        ["Sales", "Greeting", s.greeting],
-        ["Sales", "Rapport", s.rapport],
-        ["Sales", "Discovery", s.discovery],
-        ["Sales", "Value Explanation", s.value_explanation],
-        ["Sales", "Objection Handling", s.objection_handling],
-        ["Sales", "Script Adherence", s.script_adherence],
-        ["Sales", "Closing", s.closing],
-        ["Sales", "Compliance", s.compliance],
-        ["Sales", "Composite", s.composite],
-      ].forEach(([cat, dim, val]) => rows.push([String(cat), String(dim), String(Number(val).toFixed(1))]));
+      (
+        [
+          ["Sales", "Greeting", s.greeting],
+          ["Sales", "Rapport", s.rapport],
+          ["Sales", "Discovery", s.discovery],
+          ["Sales", "Value Explanation", s.value_explanation],
+          ["Sales", "Objection Handling", s.objection_handling],
+          ["Sales", "Script Adherence", s.script_adherence],
+          ["Sales", "Closing", s.closing],
+          ["Sales", "Compliance", s.compliance],
+          ["Sales", "Composite", s.composite],
+        ] as [string, string, number][]
+      ).forEach(([cat, dim, val]) => rows.push([cat, dim, Number(val).toFixed(1)]));
     }
     const csv = rows.map((r) => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
@@ -107,55 +190,6 @@ export default function CallDetailPage() {
     setTimeout(() => window.print(), 100);
   }
 
-  const { data: call, isLoading: callLoading } = useQuery({
-    queryKey: ["call", id],
-    queryFn: () => fetchCall(id!),
-    enabled: !!id,
-    refetchInterval: (query) =>
-      query.state.data && !["COMPLETED", "FAILED"].includes(query.state.data.status) ? 10_000 : false,
-  });
-
-  const isCompleted = call?.status === "COMPLETED";
-
-  const { data: transcript, isLoading: transcriptLoading } = useQuery({
-    queryKey: ["transcript", id],
-    queryFn: () => fetchTranscript(id!),
-    enabled: !!id && isCompleted,
-    retry: false,
-  });
-
-  const { data: audioUrl } = useQuery({
-    queryKey: ["audio-url", id],
-    queryFn: () => fetchAudioUrl(id!),
-    enabled: !!id && isCompleted,
-    staleTime: 90 * 60 * 1000, // presigned URL valid for 2h, refetch before expiry
-  });
-
-  const { data: scores } = useQuery({
-    queryKey: ["scores", id],
-    queryFn: () => fetchScores(id!),
-    enabled: !!id && isCompleted,
-    retry: false,
-  });
-
-  const { data: summary } = useQuery({
-    queryKey: ["summary", id],
-    queryFn: () => fetchSummary(id!),
-    enabled: !!id && isCompleted,
-    retry: false,
-  });
-
-  const { data: coaching } = useQuery({
-    queryKey: ["coaching", id],
-    queryFn: () => fetchCoaching(id!),
-    enabled: !!id && isCompleted,
-    retry: false,
-  });
-
-  const handleSeek = (ms: number) => {
-    playerRef.current?.seekTo(ms);
-  };
-
   if (callLoading) {
     return (
       <div className="flex items-center justify-center h-full text-gray-400 text-sm">
@@ -171,6 +205,8 @@ export default function CallDetailPage() {
   const durationLabel = call.duration_seconds
     ? `${Math.floor(call.duration_seconds / 60)}m ${call.duration_seconds % 60}s`
     : "—";
+
+  const isProcessing = PROCESSING_STATUSES.has(call.status);
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
@@ -193,7 +229,6 @@ export default function CallDetailPage() {
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={call.status as CallStatus} />
-          {/* Export dropdown */}
           <div className="relative">
             <button
               onClick={() => setExportOpen((o) => !o)}
@@ -228,7 +263,6 @@ export default function CallDetailPage() {
               </div>
             )}
           </div>
-          {/* Delete */}
           <button
             onClick={handleDelete}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 text-sm text-red-600 hover:bg-red-50 transition-colors"
@@ -238,6 +272,19 @@ export default function CallDetailPage() {
           </button>
         </div>
       </div>
+
+      {/* Processing banner */}
+      {isProcessing && (
+        <div className="flex items-center gap-2.5 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-xl mb-5 text-sm text-blue-700">
+          <Loader2 size={14} className="animate-spin flex-shrink-0" />
+          <span>
+            {call.status === "QUEUED" && "Waiting in queue…"}
+            {call.status === "TRANSCRIBING" && "Transcribing audio — transcript will appear automatically when ready."}
+            {call.status === "ANALYZING" && "Transcript ready · Analyzing speech features…"}
+            {call.status === "SCORING" && "Speech analysis done · Scoring with AI — almost there…"}
+          </span>
+        </div>
+      )}
 
       {/* Metadata cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
@@ -277,6 +324,10 @@ export default function CallDetailPage() {
             >
               <Icon size={14} />
               {label}
+              {/* Dot indicator when data is live but call not complete */}
+              {tabId === "transcript" && transcript && !isCompleted && (
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+              )}
             </button>
           ))}
         </nav>
@@ -285,17 +336,25 @@ export default function CallDetailPage() {
       {/* Tab content */}
       {activeTab === "transcript" && (
         <div className="space-y-4">
-          {/* Audio player */}
+          {/* Audio player — only once processing is fully done */}
           {isCompleted && audioUrl ? (
             <AudioPlayer
               ref={playerRef}
               audioUrl={audioUrl}
               onTimeUpdate={setCurrentTimeMs}
             />
-          ) : (
+          ) : isProcessing ? null : (
             <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-400 flex items-center gap-2">
               <Clock size={16} />
               Audio player available once processing completes.
+            </div>
+          )}
+
+          {/* Scores-still-computing notice when transcript is available but scores aren't */}
+          {transcript && !isCompleted && isProcessing && (
+            <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+              <Loader2 size={13} className="animate-spin flex-shrink-0" />
+              Scores and summary are still computing — transcript is available now.
             </div>
           )}
 
@@ -303,7 +362,7 @@ export default function CallDetailPage() {
           <div className="bg-white rounded-xl border border-gray-200 p-4 h-[500px] flex flex-col">
             {transcriptLoading ? (
               <div className="flex items-center gap-2 text-sm text-gray-400 animate-pulse m-auto">
-                <Clock size={16} /> Loading transcript…
+                <Loader2 size={16} className="animate-spin" /> Loading transcript…
               </div>
             ) : transcript ? (
               <TranscriptViewer
@@ -311,14 +370,14 @@ export default function CallDetailPage() {
                 currentTimeMs={currentTimeMs}
                 onSeek={handleSeek}
               />
-            ) : isCompleted ? (
+            ) : transcriptAvailable ? (
               <div className="text-sm text-gray-400 m-auto">
                 Transcript not available for this call.
               </div>
             ) : (
               <div className="flex items-center gap-2 text-sm text-gray-400 m-auto">
-                <Clock size={16} />
-                Transcript will appear once the call finishes processing.
+                <Loader2 size={16} className="animate-spin" />
+                Transcript will appear automatically once transcription finishes.
               </div>
             )}
           </div>
@@ -349,17 +408,26 @@ export default function CallDetailPage() {
 
       {activeTab === "scores" && (
         <div className="space-y-4">
+          {/* Computing indicator */}
+          {isProcessing && (
+            <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+              <Loader2 size={13} className="animate-spin flex-shrink-0" />
+              {call.status === "ANALYZING"
+                ? "Analyzing speech features — scores will appear when complete."
+                : "Scoring with AI — this may take a few minutes."}
+            </div>
+          )}
           <div className="bg-white rounded-xl border border-gray-200 p-6">
             <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Speech Quality</h3>
             {scores?.speech ? (
               <SpeechScoreRadar score={scores.speech} />
             ) : isCompleted ? (
               <div className="flex items-center gap-2 text-sm text-gray-400">
-                <BarChart2 size={16} /> Speech scores not yet available.
+                <BarChart2 size={16} /> Speech scores not available.
               </div>
             ) : (
               <div className="flex items-center gap-2 text-sm text-gray-400">
-                <BarChart2 size={16} /> Scores will appear once processing completes.
+                <Loader2 size={16} className="animate-spin" /> Waiting for scores…
               </div>
             )}
           </div>
@@ -369,11 +437,11 @@ export default function CallDetailPage() {
               <SalesScoreRadar score={scores.sales} />
             ) : isCompleted ? (
               <div className="flex items-center gap-2 text-sm text-gray-400">
-                <BarChart2 size={16} /> Sales scores not yet available.
+                <BarChart2 size={16} /> Sales scores not available.
               </div>
             ) : (
               <div className="flex items-center gap-2 text-sm text-gray-400">
-                <BarChart2 size={16} /> Scores will appear once processing completes.
+                <Loader2 size={16} className="animate-spin" /> Waiting for scores…
               </div>
             )}
           </div>
@@ -395,12 +463,12 @@ export default function CallDetailPage() {
           ) : isCompleted ? (
             <div className="flex items-center gap-3 text-gray-400">
               <MessageSquare size={20} />
-              <span className="text-sm">Summary not yet available for this call.</span>
+              <span className="text-sm">Summary not available for this call.</span>
             </div>
           ) : (
-            <div className="flex items-center gap-3 text-gray-400">
-              <MessageSquare size={20} />
-              <span className="text-sm">Summary will appear once the call finishes processing.</span>
+            <div className="flex items-center gap-3 text-blue-600">
+              <Loader2 size={20} className="animate-spin" />
+              <span className="text-sm">Summary will be generated once all processing completes.</span>
             </div>
           )}
         </div>

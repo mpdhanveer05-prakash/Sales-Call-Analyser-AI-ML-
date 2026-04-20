@@ -13,7 +13,8 @@ export type CallStatus =
   | "ANALYZING"
   | "SCORING"
   | "COMPLETED"
-  | "FAILED";
+  | "FAILED"
+  | "CANCELLED";
 
 export interface Call {
   id: string;

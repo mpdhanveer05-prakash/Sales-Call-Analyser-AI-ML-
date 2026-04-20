@@ -8,6 +8,7 @@ const statusStyles: Record<CallStatus, string> = {
   SCORING: "bg-purple-100 text-purple-700",
   COMPLETED: "bg-green-100 text-green-700",
   FAILED: "bg-red-100 text-red-700",
+  CANCELLED: "bg-gray-100 text-gray-500",
 };
 
 interface StatusBadgeProps {
