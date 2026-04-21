@@ -141,36 +141,52 @@ def _assign_speakers_pyannote(
 
 def _assign_speakers_heuristic(whisper_segments: list) -> list[TranscriptSegment]:
     """
-    Simple turn-taking heuristic for 2-speaker phone calls.
-    Alternates AGENT / CUSTOMER on pauses >= PAUSE_THRESHOLD seconds.
-    First speaker is always AGENT (they dial out).
+    Turn-taking heuristic for 2-speaker outbound phone calls.
+    Alternates speakers on pauses >= PAUSE_THRESHOLD seconds.
+    The speaker with the most total talk time is labelled AGENT — more
+    robust than assuming the first speaker is the agent, because in 3CX
+    recordings the customer often answers first ("Hello?").
     """
     PAUSE_THRESHOLD = 0.8
 
-    speakers = ["AGENT", "CUSTOMER"]
-    speaker_idx = 0
+    provisional: list[dict] = []
+    spk_idx = 0
     prev_end = 0.0
-    result: list[TranscriptSegment] = []
 
     for seg in whisper_segments:
         gap = seg.start - prev_end
         if gap >= PAUSE_THRESHOLD and prev_end > 0:
-            speaker_idx = 1 - speaker_idx
+            spk_idx = 1 - spk_idx
 
         avg_conf = (
             sum(w.probability for w in seg.words) / len(seg.words)
             if seg.words else 0.9
         )
-        result.append(TranscriptSegment(
-            speaker=speakers[speaker_idx],
-            start_ms=int(seg.start * 1000),
-            end_ms=int(seg.end * 1000),
-            text=seg.text.strip(),
-            confidence=round(avg_conf, 4),
-        ))
+        provisional.append({
+            "spk": spk_idx,
+            "start_ms": int(seg.start * 1000),
+            "end_ms": int(seg.end * 1000),
+            "text": seg.text.strip(),
+            "confidence": round(avg_conf, 4),
+        })
         prev_end = seg.end
 
-    return result
+    # Determine which provisional index is the AGENT: the one with more
+    # total speaking time (outbound sales agents talk more than customers).
+    time_0 = sum((s["end_ms"] - s["start_ms"]) for s in provisional if s["spk"] == 0)
+    time_1 = sum((s["end_ms"] - s["start_ms"]) for s in provisional if s["spk"] == 1)
+    agent_spk = 0 if time_0 >= time_1 else 1
+
+    return [
+        TranscriptSegment(
+            speaker="AGENT" if s["spk"] == agent_spk else "CUSTOMER",
+            start_ms=s["start_ms"],
+            end_ms=s["end_ms"],
+            text=s["text"],
+            confidence=s["confidence"],
+        )
+        for s in provisional
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +221,11 @@ async def transcribe_audio(request: TranscribeRequest) -> TranscribeResponse:
             "beam_size": 5,
             "word_timestamps": True,
             "vad_filter": True,
-            "vad_parameters": {"min_silence_duration_ms": 500},
+            "vad_parameters": {"min_silence_duration_ms": 300, "speech_pad_ms": 200},
+            "condition_on_previous_text": False,  # prevents hallucination loops
+            "no_speech_threshold": 0.6,
+            "log_prob_threshold": -1.0,
+            "compression_ratio_threshold": 2.4,
         }
         if request.language:
             transcribe_kwargs["language"] = request.language

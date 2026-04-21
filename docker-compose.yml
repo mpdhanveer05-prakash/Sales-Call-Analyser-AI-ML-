@@ -167,7 +167,7 @@ services:
       MINIO_ENDPOINT: minio:9000
       MINIO_SECURE: "false"
       # Whisper model settings — change to large-v3 once GPU is confirmed
-      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-base}
+      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
       WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
       WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
       MODEL_CACHE_DIR: /app/model_cache
