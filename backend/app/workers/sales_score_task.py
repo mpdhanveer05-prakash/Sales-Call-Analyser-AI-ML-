@@ -174,21 +174,15 @@ def sales_score_task(self, call_id: str) -> dict:
         if not segments:
             raise ValueError(f"No transcript segments for call {call_id}")
 
-        logger.info("Running Ollama sales scoring for call %s (%d segments)", call_id, len(segments))
-        sales_result = ollama_service.score_sales_quality(segments, rubric)
+        logger.info("Running combined LLM analysis for call %s (%d segments)", call_id, len(segments))
+        result = ollama_service.analyze_call_complete(segments, rubric)
 
-        logger.info("Running Ollama summarisation for call %s", call_id)
-        summary_result = ollama_service.generate_summary(segments)
-
-        logger.info("Running Ollama disposition classification for call %s", call_id)
-        disposition_result = ollama_service.classify_disposition(segments)
-
-        logger.info("Extracting coaching moments and objections for call %s", call_id)
-        coaching_moments = ollama_service.extract_coaching_moments(segments)
-        objections = ollama_service.extract_objections(segments)
-
-        logger.info("Analyzing sentiment timeline for call %s", call_id)
-        sentiment_timeline = ollama_service.analyze_sentiment_timeline(segments)
+        sales_result = result["sales"]
+        summary_result = result["summary"]
+        disposition_result = result["disposition"]
+        coaching_moments = result["coaching_moments"]
+        objections = result["objections"]
+        sentiment_timeline = result["sentiment_timeline"]
 
         _save_results(
             call_id, sales_result, summary_result, disposition_result,

@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # Ollama
     ollama_url: str = "http://localhost:11434"
     ollama_default_model: str = "llama3.2:3b"
-    ollama_timeout_seconds: int = 600
+    ollama_timeout_seconds: int = 900
 
     # Claude API (optional — enables high-accuracy LLM scoring when key is set)
     claude_api_key: str = ""

@@ -121,14 +121,14 @@ def _call_claude(prompt: str, system: str, max_tokens: int = 1024) -> dict:
     return _extract_json(content)
 
 
-def _call_ollama(prompt: str, system: str, max_retries: int = 3) -> dict:
+def _call_ollama(prompt: str, system: str, max_retries: int = 3, num_predict: int = 1000) -> dict:
     payload = {
         "model": settings.ollama_default_model,
         "prompt": prompt,
         "system": system,
         "format": "json",
         "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 800, "seed": 42},
+        "options": {"temperature": 0.1, "num_predict": num_predict, "seed": 42},
     }
     last_exc: Exception = RuntimeError("No attempts made")
     for attempt in range(max_retries):
@@ -150,14 +150,14 @@ def _call_ollama(prompt: str, system: str, max_retries: int = 3) -> dict:
     raise RuntimeError(f"Ollama failed after {max_retries} attempts: {last_exc}")
 
 
-def _call_llm(prompt: str, system: str, max_tokens: int = 1024) -> dict:
+def _call_llm(prompt: str, system: str, max_tokens: int = 1000) -> dict:
     """Use Claude if API key is configured, otherwise Ollama."""
     if settings.claude_api_key:
         try:
             return _call_claude(prompt, system, max_tokens)
         except Exception as exc:
             logger.warning("Claude API failed, falling back to Ollama: %s", exc)
-    return _call_ollama(prompt, system)
+    return _call_ollama(prompt, system, num_predict=max_tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -465,3 +465,193 @@ def extract_objections(segments: list[dict]) -> list[dict]:
     except Exception as exc:
         logger.warning("extract_objections failed — returning []: %s", exc)
         return []
+
+
+# ---------------------------------------------------------------------------
+# Combined analysis — single LLM call for all outputs (6x faster on CPU)
+# ---------------------------------------------------------------------------
+
+_COMBINED_SYSTEM = (
+    "You are an expert sales call analyst. Analyze sales call transcripts and return "
+    "all analysis as a single structured JSON object. Output valid JSON only — no prose, "
+    "no markdown, no explanation outside the JSON."
+)
+
+_COMBINED_PROMPT_TEMPLATE = """Analyze this outbound sales call and return ONE JSON object covering all analysis.
+
+SALES RUBRIC (required talking points):
+{rubric_text}
+
+DISPOSITION CODES (pick exactly one):
+{disposition_codes}
+
+TRANSCRIPT:
+{transcript}
+
+Return ONLY this JSON (fill in all values based on the transcript):
+{{
+  "sales_scores": {{
+    "greeting":           {{"score": 5, "justification": "reason", "quote": ""}},
+    "rapport":            {{"score": 5, "justification": "reason", "quote": ""}},
+    "discovery":          {{"score": 5, "justification": "reason", "quote": ""}},
+    "value_explanation":  {{"score": 5, "justification": "reason", "quote": ""}},
+    "objection_handling": {{"score": 5, "justification": "reason", "quote": ""}},
+    "script_adherence":   {{"score": 5, "justification": "reason", "quote": ""}},
+    "closing":            {{"score": 5, "justification": "reason", "quote": ""}},
+    "compliance":         {{"score": 5, "justification": "reason", "quote": ""}}
+  }},
+  "summary": {{
+    "executive_summary": "3-4 sentence summary of call outcome",
+    "key_moments": ["moment 1", "moment 2", "moment 3"],
+    "coaching_suggestions": ["suggestion 1", "suggestion 2", "suggestion 3"]
+  }},
+  "disposition": {{"disposition": "ONE_CODE", "confidence": 0.85, "reasoning": "one sentence"}},
+  "coaching_moments": [
+    {{"start_ms": 0, "end_ms": 30000, "category": "greeting", "reason": "reason for coaching"}}
+  ],
+  "objections": [
+    {{"timestamp_ms": 0, "objection_type": "PRICE", "quote": "exact quote", "resolved": false}}
+  ],
+  "sentiment_timeline": [
+    {{"phase": "Opening",   "start_ms": 0,      "end_ms": 60000,  "sentiment": "neutral",  "score": 0.5, "evidence": "reason"}},
+    {{"phase": "Discovery", "start_ms": 60000,  "end_ms": 180000, "sentiment": "neutral",  "score": 0.5, "evidence": "reason"}},
+    {{"phase": "Pitch",     "start_ms": 180000, "end_ms": 300000, "sentiment": "neutral",  "score": 0.5, "evidence": "reason"}},
+    {{"phase": "Objection", "start_ms": 300000, "end_ms": 420000, "sentiment": "neutral",  "score": 0.5, "evidence": "reason"}},
+    {{"phase": "Closing",   "start_ms": 420000, "end_ms": 999999, "sentiment": "neutral",  "score": 0.5, "evidence": "reason"}}
+  ]
+}}"""
+
+
+def analyze_call_complete(segments: list[dict], rubric: dict) -> dict:
+    """
+    Single LLM call returning all analysis.
+    Replaces 6 separate calls — ~6x faster on CPU inference.
+    """
+    rubric_text = "\n".join(
+        f"- {p}" for p in rubric.get("required_points", [
+            "Introduce yourself and company",
+            "Ask discovery questions",
+            "Explain product benefits",
+            "Handle objections",
+            "Ask for a next step or commitment",
+        ])
+    )
+    transcript = format_transcript(segments, max_words=1200)
+    prompt = _COMBINED_PROMPT_TEMPLATE.format(
+        rubric_text=rubric_text,
+        disposition_codes="\n".join(DISPOSITION_CODES),
+        transcript=transcript,
+    )
+
+    raw = _call_llm(prompt, _COMBINED_SYSTEM, max_tokens=1500)
+
+    # --- Sales scores ---
+    raw_scores = raw.get("sales_scores", {})
+    scores: dict[str, Any] = {}
+    dimension_scores: dict[str, float] = {}
+    for dim in SALES_DIMENSIONS:
+        dim_data = raw_scores.get(dim, {})
+        if not isinstance(dim_data, dict):
+            dim_data = {}
+        try:
+            raw_score = max(0, min(10, float(dim_data.get("score", 5))))
+        except (TypeError, ValueError):
+            raw_score = 5.0
+        scores[dim] = {
+            "score": raw_score,
+            "justification": str(dim_data.get("justification", "")),
+            "quote": str(dim_data.get("quote", "")),
+        }
+        dimension_scores[dim] = round(raw_score * 10, 1)
+    composite = sum(dimension_scores[d] * SALES_WEIGHTS[d] for d in SALES_DIMENSIONS)
+
+    # --- Summary ---
+    raw_sum = raw.get("summary", {})
+    summary = {
+        "executive_summary": str(raw_sum.get("executive_summary", "Summary not available.")),
+        "key_moments": [str(m) for m in raw_sum.get("key_moments", [])[:10]],
+        "coaching_suggestions": [str(s) for s in raw_sum.get("coaching_suggestions", [])[:10]],
+    }
+
+    # --- Disposition ---
+    raw_disp = raw.get("disposition", {})
+    disp_code = str(raw_disp.get("disposition", "OTHER")).upper().strip()
+    if disp_code not in DISPOSITION_CODES:
+        disp_code = "OTHER"
+    try:
+        confidence = max(0.0, min(1.0, float(raw_disp.get("confidence", 0.5))))
+    except (TypeError, ValueError):
+        confidence = 0.5
+    disposition = {
+        "disposition": disp_code,
+        "confidence": round(confidence, 3),
+        "reasoning": str(raw_disp.get("reasoning", "")),
+    }
+
+    # --- Coaching moments ---
+    coaching_moments: list[dict] = []
+    for item in (raw.get("coaching_moments", []) or [])[:10]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            start_ms = int(item.get("start_ms", 0))
+            end_ms = int(item.get("end_ms", 0))
+        except (TypeError, ValueError):
+            continue
+        category = str(item.get("category", "missed_opportunity")).lower().strip()
+        if category not in COACHING_CATEGORIES:
+            category = "missed_opportunity"
+        reason = str(item.get("reason", "")).strip()
+        if reason:
+            coaching_moments.append({"start_ms": start_ms, "end_ms": end_ms, "category": category, "reason": reason})
+
+    # --- Objections ---
+    objections: list[dict] = []
+    for item in (raw.get("objections", []) or [])[:20]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            timestamp_ms = int(item.get("timestamp_ms", 0))
+        except (TypeError, ValueError):
+            timestamp_ms = 0
+        obj_type = str(item.get("objection_type", "OTHER")).upper().strip()
+        if obj_type not in OBJECTION_TYPES:
+            obj_type = "OTHER"
+        quote = str(item.get("quote", "")).strip()
+        if not quote:
+            continue
+        resolved_raw = item.get("resolved", False)
+        resolved = bool(resolved_raw) if isinstance(resolved_raw, bool) else str(resolved_raw).lower() == "true"
+        objections.append({"timestamp_ms": timestamp_ms, "objection_type": obj_type, "quote": quote, "resolved": resolved})
+
+    # --- Sentiment timeline ---
+    sentiment_timeline: list[dict] = []
+    for p in (raw.get("sentiment_timeline", []) or [])[:10]:
+        if not isinstance(p, dict):
+            continue
+        sentiment = str(p.get("sentiment", "neutral")).lower()
+        if sentiment not in ("positive", "neutral", "negative"):
+            sentiment = "neutral"
+        try:
+            score = max(0.0, min(1.0, float(p.get("score", 0.5))))
+            start_ms = int(p.get("start_ms", 0))
+            end_ms = int(p.get("end_ms", 0))
+        except (TypeError, ValueError):
+            continue
+        sentiment_timeline.append({
+            "phase": str(p.get("phase", "Unknown")),
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "sentiment": sentiment,
+            "score": round(score, 3),
+            "evidence": str(p.get("evidence", "")),
+        })
+
+    return {
+        "sales": {"scores": scores, "dimension_scores": dimension_scores, "composite": round(composite, 1)},
+        "summary": summary,
+        "disposition": disposition,
+        "coaching_moments": coaching_moments,
+        "objections": objections,
+        "sentiment_timeline": sentiment_timeline,
+    }
