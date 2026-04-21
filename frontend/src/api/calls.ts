@@ -1,5 +1,5 @@
 import apiClient from "./client";
-import type { Call, PaginatedResponse, Transcript, CallScores, Summary, CoachingData } from "@/types";
+import type { Call, PaginatedResponse, Transcript, CallScores, Summary, CoachingData, CallAnalytics, KeywordHit } from "@/types";
 
 export interface CallFilters {
   page?: number;
@@ -69,5 +69,15 @@ export async function deleteCall(callId: string): Promise<void> {
 
 export async function bulkDeleteCalls(callIds: string[]): Promise<{ deleted: number }> {
   const { data } = await apiClient.post<{ deleted: number }>("/calls/bulk-delete", { call_ids: callIds });
+  return data;
+}
+
+export async function fetchCallAnalytics(callId: string): Promise<CallAnalytics> {
+  const { data } = await apiClient.get<CallAnalytics>(`/calls/${callId}/analytics`);
+  return data;
+}
+
+export async function fetchKeywordHits(callId: string): Promise<KeywordHit[]> {
+  const { data } = await apiClient.get<KeywordHit[]>(`/keyword-alerts/hits/${callId}`);
   return data;
 }

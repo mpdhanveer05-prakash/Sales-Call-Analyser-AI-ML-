@@ -1,10 +1,10 @@
 import { useRef, useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Clock, FileText, BarChart2, MessageSquare, Lightbulb, Trash2, Download, ChevronDown, Loader2 } from "lucide-react";
+import { ArrowLeft, Clock, FileText, BarChart2, MessageSquare, Lightbulb, Trash2, Download, ChevronDown, Loader2, Activity, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 
-import { fetchCall, fetchTranscript, fetchAudioUrl, fetchScores, fetchSummary, fetchCoaching, deleteCall } from "@/api/calls";
+import { fetchCall, fetchTranscript, fetchAudioUrl, fetchScores, fetchSummary, fetchCoaching, deleteCall, fetchCallAnalytics, fetchKeywordHits } from "@/api/calls";
 import { StatusBadge } from "@/components/ui/badge";
 import AudioPlayer, { type AudioPlayerHandle } from "@/components/calls/AudioPlayer";
 import TranscriptViewer from "@/components/calls/TranscriptViewer";
@@ -14,16 +14,17 @@ import SummaryCard from "@/components/calls/SummaryCard";
 import DispositionBadge from "@/components/calls/DispositionBadge";
 import CoachingTab from "@/components/calls/CoachingTab";
 import { toast } from "@/store/toastStore";
-import type { CallStatus } from "@/types";
+import type { CallStatus, SentimentPhase } from "@/types";
 import { clsx } from "clsx";
 
-type Tab = "transcript" | "scores" | "summary" | "coaching";
+type Tab = "transcript" | "scores" | "summary" | "coaching" | "analytics";
 
 const TABS: { id: Tab; label: string; icon: typeof FileText }[] = [
   { id: "transcript", label: "Transcript", icon: FileText },
   { id: "scores", label: "Scores", icon: BarChart2 },
   { id: "summary", label: "Summary", icon: MessageSquare },
   { id: "coaching", label: "Coaching", icon: Lightbulb },
+  { id: "analytics", label: "Analytics", icon: Activity },
 ];
 
 const PROCESSING_STATUSES = new Set(["QUEUED", "TRANSCRIBING", "ANALYZING", "SCORING"]);
@@ -105,6 +106,20 @@ export default function CallDetailPage() {
   const { data: coaching } = useQuery({
     queryKey: ["coaching", id],
     queryFn: () => fetchCoaching(id!),
+    enabled: !!id && isCompleted,
+    retry: false,
+  });
+
+  const { data: analytics } = useQuery({
+    queryKey: ["analytics", id],
+    queryFn: () => fetchCallAnalytics(id!),
+    enabled: !!id && transcriptAvailable,
+    retry: false,
+  });
+
+  const { data: keywordHits = [] } = useQuery({
+    queryKey: ["keyword-hits", id],
+    queryFn: () => fetchKeywordHits(id!),
     enabled: !!id && isCompleted,
     retry: false,
   });
@@ -228,6 +243,12 @@ export default function CallDetailPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {call.has_keyword_hit && (
+            <span className="flex items-center gap-1 text-xs font-medium px-2 py-1 bg-red-100 text-red-700 border border-red-200 rounded-full">
+              <AlertTriangle size={10} />
+              Alert
+            </span>
+          )}
           <StatusBadge status={call.status as CallStatus} />
           <div className="relative">
             <button
@@ -481,6 +502,141 @@ export default function CallDetailPage() {
           objections={coaching?.objections ?? []}
           onSeek={handleSeek}
         />
+      )}
+
+      {activeTab === "analytics" && (
+        <div className="space-y-4">
+          {/* Talk Ratio */}
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Talk Ratio</h3>
+            {analytics ? (
+              <div className="space-y-3">
+                <div>
+                  <div className="flex justify-between text-xs text-gray-500 mb-1">
+                    <span>Agent ({Math.round(analytics.talk_ratio * 100)}%)</span>
+                    <span>Customer ({Math.round((1 - analytics.talk_ratio) * 100)}%)</span>
+                  </div>
+                  <div className="h-4 rounded-full bg-gray-100 overflow-hidden flex">
+                    <div
+                      className="h-full bg-blue-500 transition-all"
+                      style={{ width: `${analytics.talk_ratio * 100}%` }}
+                    />
+                    <div className="h-full bg-emerald-500 flex-1" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3 mt-4">
+                  {[
+                    { label: "Agent Talk Time", value: `${analytics.agent_seconds}s` },
+                    { label: "Customer Talk Time", value: `${analytics.customer_seconds}s` },
+                    { label: "Total Talk Time", value: `${analytics.total_seconds}s` },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="bg-gray-50 rounded-lg p-3 text-center">
+                      <p className="text-xs text-gray-500">{label}</p>
+                      <p className="text-lg font-bold text-gray-800 mt-0.5">{value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <Loader2 size={16} className="animate-spin" /> Loading analytics…
+              </div>
+            )}
+          </div>
+
+          {/* Conversation Dynamics */}
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Conversation Dynamics</h3>
+            {analytics ? (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                  <p className="text-xs text-amber-600 font-medium uppercase tracking-wide">Silent Pauses</p>
+                  <p className="text-3xl font-bold text-amber-700 mt-1">{analytics.silence_count}</p>
+                  <p className="text-xs text-amber-500 mt-1">Total: {analytics.silence_total_seconds}s of silence</p>
+                </div>
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <p className="text-xs text-red-600 font-medium uppercase tracking-wide">Interruptions</p>
+                  <p className="text-3xl font-bold text-red-700 mt-1">{analytics.interruption_count}</p>
+                  <p className="text-xs text-red-500 mt-1">Speaker overlap events</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <Loader2 size={16} className="animate-spin" /> Loading…
+              </div>
+            )}
+          </div>
+
+          {/* Sentiment Timeline */}
+          {summary?.sentiment_timeline && summary.sentiment_timeline.length > 0 && (
+            <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-4">Sentiment Timeline</h3>
+              <div className="space-y-2">
+                {(summary.sentiment_timeline as SentimentPhase[]).map((phase, i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <span className="text-xs text-gray-400 w-16 text-right flex-shrink-0">
+                      {Math.floor(phase.start_ms / 1000)}s
+                    </span>
+                    <div className="flex-1 h-6 rounded-lg overflow-hidden bg-gray-100">
+                      <div
+                        className={`h-full rounded-lg ${
+                          phase.sentiment === "positive" ? "bg-emerald-400" :
+                          phase.sentiment === "negative" ? "bg-red-400" : "bg-gray-300"
+                        }`}
+                        style={{ width: `${Math.round(phase.score * 100)}%` }}
+                      />
+                    </div>
+                    <span className={`text-xs font-medium w-16 capitalize ${
+                      phase.sentiment === "positive" ? "text-emerald-600" :
+                      phase.sentiment === "negative" ? "text-red-600" : "text-gray-500"
+                    }`}>
+                      {phase.phase}
+                    </span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      phase.sentiment === "positive" ? "bg-emerald-100 text-emerald-700" :
+                      phase.sentiment === "negative" ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-600"
+                    }`}>
+                      {phase.sentiment}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Keyword Hits */}
+          {keywordHits.length > 0 && (
+            <div className="bg-white rounded-xl border border-red-200 p-6">
+              <h3 className="text-sm font-semibold text-red-700 uppercase tracking-wide mb-4 flex items-center gap-2">
+                <AlertTriangle size={14} />
+                Keyword Alerts ({keywordHits.length})
+              </h3>
+              <div className="space-y-3">
+                {keywordHits.map((hit) => (
+                  <div key={hit.id} className="border border-gray-200 rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium text-gray-900 text-sm">"{hit.keyword}"</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">{hit.category}</span>
+                        <span className="text-xs font-bold text-red-600">{hit.hit_count}×</span>
+                      </div>
+                    </div>
+                    {hit.sample_quotes && hit.sample_quotes.length > 0 && (
+                      <div className="space-y-1">
+                        {hit.sample_quotes.slice(0, 2).map((q, qi) => (
+                          <div key={qi} className="text-xs text-gray-500 bg-gray-50 rounded p-2">
+                            <span className="font-medium text-gray-600">[{q.speaker}] </span>
+                            {q.text}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

@@ -34,8 +34,12 @@ class Settings(BaseSettings):
 
     # Ollama
     ollama_url: str = "http://localhost:11434"
-    ollama_default_model: str = "llama3.2:1b"
-    ollama_timeout_seconds: int = 300
+    ollama_default_model: str = "llama3.2:3b"
+    ollama_timeout_seconds: int = 600
+
+    # Claude API (optional — enables high-accuracy LLM scoring when key is set)
+    claude_api_key: str = ""
+    claude_model: str = "claude-haiku-4-5-20251001"
 
     # ML Service
     ml_service_url: str = "http://localhost:8001"

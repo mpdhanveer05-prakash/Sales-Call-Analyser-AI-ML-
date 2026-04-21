@@ -28,6 +28,7 @@ export interface Call {
   sales_score: number | null;
   original_filename: string;
   uploaded_at: string;
+  has_keyword_hit?: boolean;
 }
 
 export interface Agent {
@@ -111,6 +112,15 @@ export interface CallScores {
   sales: SalesScore | null;
 }
 
+export interface SentimentPhase {
+  phase: string;
+  start_ms: number;
+  end_ms: number;
+  sentiment: "positive" | "neutral" | "negative";
+  score: number;
+  evidence?: string | null;
+}
+
 export interface Summary {
   id: string;
   call_id: string;
@@ -119,6 +129,43 @@ export interface Summary {
   coaching_suggestions: string[];
   disposition_confidence: number | null;
   disposition_reasoning: string | null;
+  sentiment_timeline: SentimentPhase[] | null;
+  created_at: string;
+}
+
+export interface CallAnalytics {
+  call_id: string;
+  agent_seconds: number;
+  customer_seconds: number;
+  total_seconds: number;
+  talk_ratio: number;
+  silence_count: number;
+  silence_total_seconds: number;
+  interruption_count: number;
+}
+
+export interface AgentComparison {
+  period_days: number;
+  agent_a: AgentScorecard;
+  agent_b: AgentScorecard;
+}
+
+export interface KeywordAlert {
+  id: string;
+  keyword: string;
+  category: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface KeywordHit {
+  id: string;
+  call_id: string;
+  keyword_alert_id: string;
+  keyword: string;
+  category: string;
+  hit_count: number;
+  sample_quotes: Array<{ timestamp_ms: number; speaker: string; text: string }> | null;
   created_at: string;
 }
 

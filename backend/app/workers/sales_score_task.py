@@ -84,6 +84,7 @@ def _save_results(
     disposition_result: dict,
     coaching_moments: list[dict],
     objections: list[dict],
+    sentiment_timeline: list[dict] | None = None,
 ) -> None:
     with SyncSessionLocal() as db:
         for Model in (SalesScore, Summary):
@@ -124,6 +125,7 @@ def _save_results(
             coaching_suggestions=summary_result["coaching_suggestions"],
             disposition_confidence=disposition_result.get("confidence"),
             disposition_reasoning=disposition_result.get("reasoning"),
+            sentiment_timeline=sentiment_timeline or [],
         ))
 
         for moment in coaching_moments:
@@ -185,9 +187,12 @@ def sales_score_task(self, call_id: str) -> dict:
         coaching_moments = ollama_service.extract_coaching_moments(segments)
         objections = ollama_service.extract_objections(segments)
 
+        logger.info("Analyzing sentiment timeline for call %s", call_id)
+        sentiment_timeline = ollama_service.analyze_sentiment_timeline(segments)
+
         _save_results(
             call_id, sales_result, summary_result, disposition_result,
-            coaching_moments, objections,
+            coaching_moments, objections, sentiment_timeline,
         )
         _update_call_status(call_id, CallStatus.COMPLETED)
 
@@ -201,6 +206,12 @@ def sales_score_task(self, call_id: str) -> dict:
             index_task.delay(call_id)
         except Exception as e:
             logger.warning("Could not dispatch index_task for call %s: %s", call_id, e)
+
+        try:
+            from app.workers.keyword_check_task import keyword_check_task
+            keyword_check_task.delay(call_id)
+        except Exception as e:
+            logger.warning("Could not dispatch keyword_check_task for call %s: %s", call_id, e)
 
         return {
             "call_id": call_id,

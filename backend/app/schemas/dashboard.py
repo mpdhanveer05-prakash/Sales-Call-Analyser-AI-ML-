@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional
+import uuid
 
 
 class ScoreTrendPoint(BaseModel):
@@ -41,3 +42,30 @@ class TeamDashboardOut(BaseModel):
     disposition_breakdown: dict
     weekly_trend: list[ScoreTrendPoint]
     leaderboard: list[LeaderboardEntry]
+
+
+class CallAnalyticsOut(BaseModel):
+    call_id: uuid.UUID
+    agent_seconds: float
+    customer_seconds: float
+    total_seconds: float
+    talk_ratio: float
+    silence_count: int
+    silence_total_seconds: float
+    interruption_count: int
+
+
+class AgentComparisonOut(BaseModel):
+    period_days: int
+    agent_a: AgentScorecardOut
+    agent_b: AgentScorecardOut
+
+
+class KeywordAlertOut(BaseModel):
+    id: uuid.UUID
+    keyword: str
+    category: str
+    is_active: bool
+    created_at: str
+
+    model_config = {"from_attributes": True}

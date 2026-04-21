@@ -22,6 +22,7 @@ class Summary(Base):
     coaching_suggestions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     disposition_confidence: Mapped[Optional[float]] = mapped_column(Numeric(4, 3), nullable=True)
     disposition_reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    sentiment_timeline: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

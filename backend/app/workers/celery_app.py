@@ -10,6 +10,7 @@ celery_app = Celery(
         "app.workers.transcribe_task",
         "app.workers.speech_score_task",
         "app.workers.sales_score_task",
+        "app.workers.keyword_check_task",
     ],
 )
 

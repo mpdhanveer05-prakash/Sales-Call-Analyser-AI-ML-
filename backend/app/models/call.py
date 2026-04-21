@@ -45,6 +45,7 @@ class Call(Base):
     speech_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
     sales_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    has_keyword_hit: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

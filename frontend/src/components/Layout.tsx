@@ -1,11 +1,12 @@
 import { Outlet, NavLink, useNavigate } from "react-router-dom";
-import { PhoneCall, Upload, LogOut, LayoutDashboard, Settings, Search } from "lucide-react";
+import { PhoneCall, Upload, LogOut, LayoutDashboard, Settings, Search, Users } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 
 const navItems = [
   { to: "/calls", label: "Calls", icon: PhoneCall },
   { to: "/upload", label: "Upload", icon: Upload },
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/compare", label: "Compare", icon: Users },
   { to: "/search", label: "Search", icon: Search },
   { to: "/settings", label: "Settings", icon: Settings },
 ];

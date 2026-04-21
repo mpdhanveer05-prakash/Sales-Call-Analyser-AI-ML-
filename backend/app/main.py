@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import auth, calls, agents, scripts, search, dashboard
+from app.routers import auth, calls, agents, scripts, search, dashboard, keyword_alerts
 
 app = FastAPI(
     title="Sales Call Analyzer API",
@@ -24,6 +24,7 @@ app.include_router(agents.router, prefix="/api/v1")
 app.include_router(scripts.router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
 app.include_router(dashboard.router, prefix="/api/v1")
+app.include_router(keyword_alerts.router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["health"])

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { format } from "date-fns";
-import { RefreshCw, Upload, Search, XCircle, Trash2 } from "lucide-react";
+import { RefreshCw, Upload, Search, XCircle, Trash2, AlertTriangle } from "lucide-react";
 import { useCalls } from "@/hooks/useCalls";
 import { useAgents } from "@/hooks/useAgents";
 import { StatusBadge } from "@/components/ui/badge";
@@ -314,7 +314,15 @@ export default function CallsListPage() {
                   </td>
                   <td className="px-5 py-3.5 text-gray-700 whitespace-nowrap">{formatDuration(call.duration_seconds)}</td>
                   <td className="px-5 py-3.5">
-                    <StatusBadge status={call.status as CallStatus} />
+                    <div className="flex items-center gap-1.5">
+                      <StatusBadge status={call.status as CallStatus} />
+                      {call.has_keyword_hit && (
+                        <span title="Keyword alert triggered" className="flex items-center gap-0.5 text-xs px-1.5 py-0.5 bg-red-100 text-red-600 border border-red-200 rounded-full">
+                          <AlertTriangle size={9} />
+                          Alert
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-5 py-3.5">
                     {call.disposition ? <DispositionBadge disposition={call.disposition} size="sm" /> : <span className="text-gray-400 text-xs">—</span>}

@@ -1,12 +1,13 @@
 """
-Ollama LLM service for sales quality scoring, call summarisation, and disposition classification.
+LLM service for sales quality scoring, summarisation, sentiment, and disposition.
 
-All functions are synchronous — intended for use inside Celery tasks.
-Uses Ollama's /api/generate with format=json for structured outputs.
+Uses Claude API when CLAUDE_API_KEY is set (higher accuracy, faster).
+Falls back to Ollama (local) otherwise.
+
+All functions are synchronous — intended for Celery tasks.
 """
 import json
 import logging
-import re
 import time
 from typing import Any
 
@@ -42,10 +43,10 @@ SALES_WEIGHTS: dict[str, float] = {
 
 
 # ---------------------------------------------------------------------------
-# Transcript formatter
+# Transcript formatters
 # ---------------------------------------------------------------------------
 
-def format_transcript(segments: list[dict], max_words: int = 1500) -> str:
+def format_transcript(segments: list[dict], max_words: int = 2000) -> str:
     lines: list[str] = []
     word_count = 0
     for seg in segments:
@@ -54,15 +55,31 @@ def format_transcript(segments: list[dict], max_words: int = 1500) -> str:
         text = seg["text"].strip()
         words = text.split()
         if word_count + len(words) > max_words:
-            lines.append(f"[{m:02d}:{s:02d} {seg['speaker']}] [...transcript truncated for length...]")
+            lines.append(f"[{m:02d}:{s:02d} {seg['speaker']}] [...transcript truncated...]")
             break
         lines.append(f"[{m:02d}:{s:02d} {seg['speaker']}] {text}")
         word_count += len(words)
     return "\n".join(lines)
 
 
+def _format_transcript_with_timestamps(segments: list[dict], max_words: int = 2000) -> str:
+    lines: list[str] = []
+    word_count = 0
+    for seg in segments:
+        start_sec = seg["start_ms"] // 1000
+        m, s = divmod(start_sec, 60)
+        text = seg["text"].strip()
+        words = text.split()
+        if word_count + len(words) > max_words:
+            lines.append(f"{seg['speaker']} [{m}:{s:02d}]: [...truncated...]")
+            break
+        lines.append(f"{seg['speaker']} [{m}:{s:02d}]: {text}")
+        word_count += len(words)
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
-# JSON extraction helpers
+# JSON extraction
 # ---------------------------------------------------------------------------
 
 def _extract_json(text: str) -> dict:
@@ -81,6 +98,29 @@ def _extract_json(text: str) -> dict:
     raise ValueError(f"Cannot parse JSON from: {text[:300]}")
 
 
+# ---------------------------------------------------------------------------
+# LLM backends
+# ---------------------------------------------------------------------------
+
+def _call_claude(prompt: str, system: str, max_tokens: int = 1024) -> dict:
+    headers = {
+        "x-api-key": settings.claude_api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    payload = {
+        "model": settings.claude_model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
+        resp.raise_for_status()
+    content = resp.json()["content"][0]["text"]
+    return _extract_json(content)
+
+
 def _call_ollama(prompt: str, system: str, max_retries: int = 3) -> dict:
     payload = {
         "model": settings.ollama_default_model,
@@ -88,7 +128,7 @@ def _call_ollama(prompt: str, system: str, max_retries: int = 3) -> dict:
         "system": system,
         "format": "json",
         "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 600, "seed": 42},
+        "options": {"temperature": 0.1, "num_predict": 800, "seed": 42},
     }
     last_exc: Exception = RuntimeError("No attempts made")
     for attempt in range(max_retries):
@@ -96,13 +136,11 @@ def _call_ollama(prompt: str, system: str, max_retries: int = 3) -> dict:
             with httpx.Client(timeout=float(settings.ollama_timeout_seconds)) as client:
                 resp = client.post(f"{settings.ollama_url}/api/generate", json=payload)
                 resp.raise_for_status()
-            data = resp.json()
-            result = _extract_json(data.get("response", ""))
-            return result
+            return _extract_json(resp.json().get("response", ""))
         except (httpx.TimeoutException, httpx.ConnectError) as exc:
             last_exc = exc
             wait = 15 * (attempt + 1)
-            logger.warning("Ollama connection error (attempt %d/%d): %s — retrying in %ds", attempt + 1, max_retries, exc, wait)
+            logger.warning("Ollama error (attempt %d/%d): %s — retrying in %ds", attempt + 1, max_retries, exc, wait)
             time.sleep(wait)
         except ValueError as exc:
             last_exc = exc
@@ -112,6 +150,16 @@ def _call_ollama(prompt: str, system: str, max_retries: int = 3) -> dict:
     raise RuntimeError(f"Ollama failed after {max_retries} attempts: {last_exc}")
 
 
+def _call_llm(prompt: str, system: str, max_tokens: int = 1024) -> dict:
+    """Use Claude if API key is configured, otherwise Ollama."""
+    if settings.claude_api_key:
+        try:
+            return _call_claude(prompt, system, max_tokens)
+        except Exception as exc:
+            logger.warning("Claude API failed, falling back to Ollama: %s", exc)
+    return _call_ollama(prompt, system)
+
+
 # ---------------------------------------------------------------------------
 # Sales quality scoring
 # ---------------------------------------------------------------------------
@@ -119,10 +167,11 @@ def _call_ollama(prompt: str, system: str, max_retries: int = 3) -> dict:
 _SALES_SYSTEM = (
     "You are an expert sales quality analyst. "
     "Evaluate sales call transcripts objectively and output structured JSON only. "
-    "Score strictly from 0 to 10 with 10 being perfect and 0 being completely absent."
+    "Score strictly from 0 to 10 with 10 being perfect and 0 being completely absent. "
+    "Be precise — quote exact phrases from the transcript as evidence."
 )
 
-_SALES_PROMPT_TEMPLATE = """Analyze this outbound sales call transcript and score the AGENT on 8 dimensions.
+_SALES_PROMPT_TEMPLATE = """Analyze this outbound sales call and score the AGENT on 8 dimensions.
 
 SALES SCRIPT RUBRIC (required talking points):
 {rubric_text}
@@ -130,9 +179,9 @@ SALES SCRIPT RUBRIC (required talking points):
 TRANSCRIPT:
 {transcript}
 
-Score each dimension from 0 to 10. Return ONLY valid JSON with this exact structure (no extra text):
+Score each dimension 0-10 based ONLY on evidence in the transcript. Return ONLY valid JSON:
 {{
-  "greeting":          {{"score": 0, "justification": "...", "quote": "..."}},
+  "greeting":          {{"score": 0, "justification": "...", "quote": "exact quote or empty string"}},
   "rapport":           {{"score": 0, "justification": "...", "quote": "..."}},
   "discovery":         {{"score": 0, "justification": "...", "quote": "..."}},
   "value_explanation": {{"score": 0, "justification": "...", "quote": "..."}},
@@ -144,28 +193,19 @@ Score each dimension from 0 to 10. Return ONLY valid JSON with this exact struct
 
 
 def score_sales_quality(segments: list[dict], rubric: dict) -> dict:
-    """
-    Returns dict with keys:
-      - scores: {dim: {score, justification, quote}}
-      - composite: float (0-100)
-      - dimension_scores: {dim: float 0-100}
-    """
     rubric_text = "\n".join(f"- {p}" for p in rubric.get("required_points", ["Cover key product benefits", "Ask for commitment"]))
     transcript = format_transcript(segments)
-
     prompt = _SALES_PROMPT_TEMPLATE.format(rubric_text=rubric_text, transcript=transcript)
-    raw = _call_ollama(prompt, _SALES_SYSTEM)
+    raw = _call_llm(prompt, _SALES_SYSTEM)
 
-    # Validate and extract per-dimension scores
     scores: dict[str, Any] = {}
     dimension_scores: dict[str, float] = {}
     for dim in SALES_DIMENSIONS:
         dim_data = raw.get(dim, {})
         if not isinstance(dim_data, dict):
             dim_data = {}
-        raw_score = dim_data.get("score", 5)
         try:
-            raw_score = max(0, min(10, float(raw_score)))
+            raw_score = max(0, min(10, float(dim_data.get("score", 5))))
         except (TypeError, ValueError):
             raw_score = 5.0
         scores[dim] = {
@@ -173,14 +213,10 @@ def score_sales_quality(segments: list[dict], rubric: dict) -> dict:
             "justification": str(dim_data.get("justification", "")),
             "quote": str(dim_data.get("quote", "")),
         }
-        dimension_scores[dim] = round(raw_score * 10, 1)  # 0-100
+        dimension_scores[dim] = round(raw_score * 10, 1)
 
     composite = sum(dimension_scores[d] * SALES_WEIGHTS[d] for d in SALES_DIMENSIONS)
-    return {
-        "scores": scores,
-        "dimension_scores": dimension_scores,
-        "composite": round(composite, 1),
-    }
+    return {"scores": scores, "dimension_scores": dimension_scores, "composite": round(composite, 1)}
 
 
 # ---------------------------------------------------------------------------
@@ -189,28 +225,25 @@ def score_sales_quality(segments: list[dict], rubric: dict) -> dict:
 
 _SUMMARY_SYSTEM = (
     "You are a senior sales manager reviewing a call recording. "
-    "Provide concise, actionable insights for coaching. Output JSON only."
+    "Provide concise, actionable insights. Output JSON only."
 )
 
-_SUMMARY_PROMPT_TEMPLATE = """Analyze this sales call transcript and generate a structured summary.
+_SUMMARY_PROMPT_TEMPLATE = """Analyze this sales call and generate a structured summary.
 
 TRANSCRIPT:
 {transcript}
 
-Return ONLY valid JSON (no extra text):
+Return ONLY valid JSON:
 {{
   "executive_summary": "3-4 sentence summary of the call outcome and key highlights",
   "key_moments": ["moment 1", "moment 2", "moment 3"],
-  "coaching_suggestions": ["actionable suggestion 1", "actionable suggestion 2", "actionable suggestion 3"]
+  "coaching_suggestions": ["actionable suggestion 1", "suggestion 2", "suggestion 3"]
 }}"""
 
 
 def generate_summary(segments: list[dict]) -> dict:
-    """Returns {executive_summary, key_moments, coaching_suggestions}."""
     transcript = format_transcript(segments)
-    prompt = _SUMMARY_PROMPT_TEMPLATE.format(transcript=transcript)
-    raw = _call_ollama(prompt, _SUMMARY_SYSTEM)
-
+    raw = _call_llm(_SUMMARY_PROMPT_TEMPLATE.format(transcript=transcript), _SUMMARY_SYSTEM)
     return {
         "executive_summary": str(raw.get("executive_summary", "Summary not available.")),
         "key_moments": [str(m) for m in raw.get("key_moments", [])[:10]],
@@ -223,8 +256,7 @@ def generate_summary(segments: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 _DISPOSITION_SYSTEM = (
-    "You are a sales operations analyst. "
-    "Classify sales call outcomes using the provided taxonomy. Output JSON only."
+    "You are a sales operations analyst. Classify call outcomes. Output JSON only."
 )
 
 _DISPOSITION_PROMPT_TEMPLATE = """Classify this sales call into exactly ONE of these 18 disposition codes:
@@ -234,32 +266,91 @@ _DISPOSITION_PROMPT_TEMPLATE = """Classify this sales call into exactly ONE of t
 TRANSCRIPT:
 {transcript}
 
-Return ONLY valid JSON (no extra text):
-{{"disposition": "ONE_CODE", "confidence": 0.95, "reasoning": "one sentence reason"}}"""
+Return ONLY valid JSON:
+{{"disposition": "ONE_CODE", "confidence": 0.95, "reasoning": "one sentence"}}"""
 
 
 def classify_disposition(segments: list[dict]) -> dict:
-    """Returns {disposition, confidence, reasoning}."""
     codes = "\n".join(DISPOSITION_CODES)
     transcript = format_transcript(segments)
-    prompt = _DISPOSITION_PROMPT_TEMPLATE.format(codes=codes, transcript=transcript)
-    raw = _call_ollama(prompt, _DISPOSITION_SYSTEM)
+    raw = _call_llm(_DISPOSITION_PROMPT_TEMPLATE.format(codes=codes, transcript=transcript), _DISPOSITION_SYSTEM)
 
     disposition = str(raw.get("disposition", "OTHER")).upper().strip()
     if disposition not in DISPOSITION_CODES:
         logger.warning("LLM returned unknown disposition '%s' — defaulting to OTHER", disposition)
         disposition = "OTHER"
-
     try:
         confidence = max(0.0, min(1.0, float(raw.get("confidence", 0.5))))
     except (TypeError, ValueError):
         confidence = 0.5
+    return {"disposition": disposition, "confidence": round(confidence, 3), "reasoning": str(raw.get("reasoning", ""))}
 
-    return {
-        "disposition": disposition,
-        "confidence": round(confidence, 3),
-        "reasoning": str(raw.get("reasoning", "")),
-    }
+
+# ---------------------------------------------------------------------------
+# Sentiment timeline
+# ---------------------------------------------------------------------------
+
+_SENTIMENT_SYSTEM = (
+    "You are a customer sentiment analyst. Analyze the CUSTOMER's emotional state during a sales call. "
+    "Output JSON only."
+)
+
+_SENTIMENT_PROMPT_TEMPLATE = """Analyze the CUSTOMER's sentiment at 5 key phases of this sales call.
+Use the timestamps in the transcript to estimate phase boundaries.
+
+TRANSCRIPT:
+{transcript}
+
+Return ONLY valid JSON with exactly 5 phases:
+{{
+  "phases": [
+    {{"phase": "Opening", "start_ms": 0, "end_ms": 60000, "sentiment": "neutral", "score": 0.5, "evidence": "brief reason"}},
+    {{"phase": "Discovery", "start_ms": 60000, "end_ms": 180000, "sentiment": "positive", "score": 0.7, "evidence": "..."}},
+    {{"phase": "Pitch", "start_ms": 180000, "end_ms": 300000, "sentiment": "neutral", "score": 0.5, "evidence": "..."}},
+    {{"phase": "Objection", "start_ms": 300000, "end_ms": 420000, "sentiment": "negative", "score": 0.3, "evidence": "..."}},
+    {{"phase": "Closing", "start_ms": 420000, "end_ms": 600000, "sentiment": "neutral", "score": 0.5, "evidence": "..."}}
+  ]
+}}
+Rules: sentiment must be "positive", "neutral", or "negative". score: 0.0=very negative, 1.0=very positive."""
+
+
+def analyze_sentiment_timeline(segments: list[dict]) -> list[dict]:
+    """Returns list of sentiment phases. Returns [] on any error."""
+    if not segments:
+        return []
+    try:
+        transcript = _format_transcript_with_timestamps(segments, max_words=2000)
+        raw = _call_llm(_SENTIMENT_PROMPT_TEMPLATE.format(transcript=transcript), _SENTIMENT_SYSTEM)
+
+        phases = raw.get("phases", [])
+        if not isinstance(phases, list):
+            return []
+
+        result: list[dict] = []
+        for p in phases[:10]:
+            if not isinstance(p, dict):
+                continue
+            sentiment = str(p.get("sentiment", "neutral")).lower()
+            if sentiment not in ("positive", "neutral", "negative"):
+                sentiment = "neutral"
+            try:
+                score = max(0.0, min(1.0, float(p.get("score", 0.5))))
+                start_ms = int(p.get("start_ms", 0))
+                end_ms = int(p.get("end_ms", 0))
+            except (TypeError, ValueError):
+                continue
+            result.append({
+                "phase": str(p.get("phase", "Unknown")),
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "sentiment": sentiment,
+                "score": round(score, 3),
+                "evidence": str(p.get("evidence", "")),
+            })
+        return result
+    except Exception as exc:
+        logger.warning("analyze_sentiment_timeline failed — returning []: %s", exc)
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -272,75 +363,35 @@ COACHING_CATEGORIES = [
 ]
 
 _COACHING_SYSTEM = (
-    "You are an expert sales coach reviewing a recorded sales call. "
-    "Identify specific moments where the agent could improve. Output structured JSON only."
+    "You are an expert sales coach. Identify where the agent could improve. Output JSON only."
 )
 
-_COACHING_PROMPT_TEMPLATE = """Review this sales call transcript and identify 3 to 5 specific coaching moments where the agent could improve.
+_COACHING_PROMPT_TEMPLATE = """Identify 3 to 5 specific coaching moments in this sales call.
 
 TRANSCRIPT:
 {transcript}
 
-For each coaching moment, provide the approximate start and end timestamps in milliseconds, a category, and a reason explaining the coaching opportunity.
-
 Valid categories: {categories}
 
-Return ONLY valid JSON with this exact structure (no extra text):
+Return ONLY valid JSON:
 {{
   "moments": [
-    {{
-      "start_ms": 5000,
-      "end_ms": 35000,
-      "category": "objection_handling",
-      "reason": "Agent failed to acknowledge the customer price concern before jumping to justification."
-    }}
+    {{"start_ms": 5000, "end_ms": 35000, "category": "objection_handling", "reason": "Agent jumped to price before acknowledging the concern."}}
   ]
 }}"""
 
 
-def _format_transcript_with_timestamps(segments: list[dict], max_words: int = 3000) -> str:
-    """Format transcript as 'SPEAKER [M:SS]: text' with timestamps."""
-    lines: list[str] = []
-    word_count = 0
-    for seg in segments:
-        start_sec = seg["start_ms"] // 1000
-        m, s = divmod(start_sec, 60)
-        text = seg["text"].strip()
-        words = text.split()
-        if word_count + len(words) > max_words:
-            lines.append(f"{seg['speaker']} [{m}:{s:02d}]: [...transcript truncated for length...]")
-            break
-        lines.append(f"{seg['speaker']} [{m}:{s:02d}]: {text}")
-        word_count += len(words)
-    return "\n".join(lines)
-
-
 def extract_coaching_moments(segments: list[dict]) -> list[dict]:
-    """
-    Identify 3-5 coaching moments from transcript segments using the LLM.
-
-    Returns a list of dicts with keys: start_ms, end_ms, category, reason.
-    Always returns [] on any error — never raises.
-    """
     if not segments:
         return []
-
     try:
-        transcript = _format_transcript_with_timestamps(segments, max_words=1000)
-        categories_str = ", ".join(COACHING_CATEGORIES)
-        prompt = _COACHING_PROMPT_TEMPLATE.format(
-            transcript=transcript,
-            categories=categories_str,
+        transcript = _format_transcript_with_timestamps(segments, max_words=2000)
+        raw = _call_llm(
+            _COACHING_PROMPT_TEMPLATE.format(transcript=transcript, categories=", ".join(COACHING_CATEGORIES)),
+            _COACHING_SYSTEM,
         )
-        raw = _call_ollama(prompt, _COACHING_SYSTEM)
-
-        moments_raw = raw.get("moments", [])
-        if not isinstance(moments_raw, list):
-            logger.warning("extract_coaching_moments: LLM returned non-list moments field")
-            return []
-
         result: list[dict] = []
-        for item in moments_raw[:10]:  # cap at 10 for safety
+        for item in (raw.get("moments", []) or [])[:10]:
             if not isinstance(item, dict):
                 continue
             try:
@@ -348,26 +399,16 @@ def extract_coaching_moments(segments: list[dict]) -> list[dict]:
                 end_ms = int(item.get("end_ms", 0))
             except (TypeError, ValueError):
                 continue
-
             category = str(item.get("category", "missed_opportunity")).lower().strip()
             if category not in COACHING_CATEGORIES:
                 category = "missed_opportunity"
-
             reason = str(item.get("reason", "")).strip()
             if not reason:
                 continue
-
-            result.append({
-                "start_ms": start_ms,
-                "end_ms": end_ms,
-                "category": category,
-                "reason": reason,
-            })
-
+            result.append({"start_ms": start_ms, "end_ms": end_ms, "category": category, "reason": reason})
         return result
-
     except Exception as exc:
-        logger.warning("extract_coaching_moments failed for call — returning []: %s", exc)
+        logger.warning("extract_coaching_moments failed — returning []: %s", exc)
         return []
 
 
@@ -377,86 +418,50 @@ def extract_coaching_moments(segments: list[dict]) -> list[dict]:
 
 OBJECTION_TYPES = ["PRICE", "TIMING", "AUTHORITY", "NEED", "COMPETITOR", "OTHER"]
 
-_OBJECTION_SYSTEM = (
-    "You are a sales analyst identifying customer objections in call transcripts. "
-    "Output structured JSON only."
-)
+_OBJECTION_SYSTEM = "You are a sales analyst identifying customer objections. Output JSON only."
 
-_OBJECTION_PROMPT_TEMPLATE = """Review this sales call transcript and identify all customer objections raised.
+_OBJECTION_PROMPT_TEMPLATE = """Identify all customer objections in this sales call.
 
 TRANSCRIPT:
 {transcript}
 
-For each objection, provide the timestamp in milliseconds, the objection type, an exact or near-exact quote from the customer, and whether the agent successfully resolved it.
-
 Valid objection_types: {types}
 
-Return ONLY valid JSON with this exact structure (no extra text):
+Return ONLY valid JSON:
 {{
   "objections": [
-    {{
-      "timestamp_ms": 45000,
-      "objection_type": "PRICE",
-      "quote": "That seems quite expensive for what we are getting.",
-      "resolved": true
-    }}
+    {{"timestamp_ms": 45000, "objection_type": "PRICE", "quote": "That seems quite expensive.", "resolved": true}}
   ]
 }}"""
 
 
 def extract_objections(segments: list[dict]) -> list[dict]:
-    """
-    Extract customer objections from transcript segments using the LLM.
-
-    Returns a list of dicts with keys: timestamp_ms, objection_type, quote, resolved.
-    Always returns [] on any error — never raises.
-    """
     if not segments:
         return []
-
     try:
-        transcript = _format_transcript_with_timestamps(segments, max_words=1000)
-        types_str = ", ".join(OBJECTION_TYPES)
-        prompt = _OBJECTION_PROMPT_TEMPLATE.format(
-            transcript=transcript,
-            types=types_str,
+        transcript = _format_transcript_with_timestamps(segments, max_words=2000)
+        raw = _call_llm(
+            _OBJECTION_PROMPT_TEMPLATE.format(transcript=transcript, types=", ".join(OBJECTION_TYPES)),
+            _OBJECTION_SYSTEM,
         )
-        raw = _call_ollama(prompt, _OBJECTION_SYSTEM)
-
-        objections_raw = raw.get("objections", [])
-        if not isinstance(objections_raw, list):
-            logger.warning("extract_objections: LLM returned non-list objections field")
-            return []
-
         result: list[dict] = []
-        for item in objections_raw[:20]:  # cap at 20 for safety
+        for item in (raw.get("objections", []) or [])[:20]:
             if not isinstance(item, dict):
                 continue
             try:
                 timestamp_ms = int(item.get("timestamp_ms", 0))
             except (TypeError, ValueError):
                 timestamp_ms = 0
-
             objection_type = str(item.get("objection_type", "OTHER")).upper().strip()
             if objection_type not in OBJECTION_TYPES:
                 objection_type = "OTHER"
-
             quote = str(item.get("quote", "")).strip()
             if not quote:
                 continue
-
             resolved_raw = item.get("resolved", False)
             resolved = bool(resolved_raw) if isinstance(resolved_raw, bool) else str(resolved_raw).lower() == "true"
-
-            result.append({
-                "timestamp_ms": timestamp_ms,
-                "objection_type": objection_type,
-                "quote": quote,
-                "resolved": resolved,
-            })
-
+            result.append({"timestamp_ms": timestamp_ms, "objection_type": objection_type, "quote": quote, "resolved": resolved})
         return result
-
     except Exception as exc:
-        logger.warning("extract_objections failed for call — returning []: %s", exc)
+        logger.warning("extract_objections failed — returning []: %s", exc)
         return []

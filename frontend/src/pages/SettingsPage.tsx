@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Save, FileText, AlertCircle } from "lucide-react";
+import { Plus, Save, FileText, AlertCircle, Bell, Trash2, ToggleLeft, ToggleRight } from "lucide-react";
 import { fetchScripts, createScript, updateScript } from "@/api/scripts";
+import { fetchKeywordAlerts, createKeywordAlert, updateKeywordAlert, deleteKeywordAlert } from "@/api/keyword_alerts";
 import { useAuthStore } from "@/store/authStore";
-import type { Script, ScriptRubric } from "@/types";
+import type { Script, ScriptRubric, KeywordAlert } from "@/types";
 
 function emptyRubric(): ScriptRubric {
   return { required_points: [], prohibited_phrases: [], required_disclosures: [] };
@@ -165,9 +166,148 @@ function ScriptEditor({
   );
 }
 
+const KEYWORD_CATEGORIES = ["COMPETITOR", "PROHIBITED", "COMPLIANCE", "CUSTOM"];
+
+function KeywordAlertsPanel() {
+  const qc = useQueryClient();
+  const [newKeyword, setNewKeyword] = useState("");
+  const [newCategory, setNewCategory] = useState("CUSTOM");
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["keyword-alerts"],
+    queryFn: fetchKeywordAlerts,
+  });
+  const keywords = data?.data ?? [];
+
+  const addMutation = useMutation({
+    mutationFn: () => createKeywordAlert(newKeyword.trim(), newCategory),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["keyword-alerts"] });
+      setNewKeyword("");
+      setAddError(null);
+    },
+    onError: (e: { response?: { data?: { detail?: string } } }) =>
+      setAddError(e?.response?.data?.detail ?? "Failed to add keyword."),
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
+      updateKeywordAlert(id, { is_active }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["keyword-alerts"] }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteKeywordAlert(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["keyword-alerts"] }),
+  });
+
+  return (
+    <div className="space-y-4">
+      {/* Add new */}
+      <div className="bg-gray-50 rounded-xl border border-gray-200 p-4">
+        <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">Add Keyword</p>
+        <div className="flex gap-2">
+          <input
+            value={newKeyword}
+            onChange={(e) => setNewKeyword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && newKeyword.trim() && addMutation.mutate()}
+            placeholder="e.g. competitor name, prohibited phrase…"
+            className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+          />
+          <select
+            value={newCategory}
+            onChange={(e) => setNewCategory(e.target.value)}
+            className="px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+          >
+            {KEYWORD_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => newKeyword.trim() && addMutation.mutate()}
+            disabled={addMutation.isPending || !newKeyword.trim()}
+            className="flex items-center gap-1.5 px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+          >
+            <Plus size={13} />
+            Add
+          </button>
+        </div>
+        {addError && (
+          <p className="text-xs text-red-600 mt-2 flex items-center gap-1">
+            <AlertCircle size={11} /> {addError}
+          </p>
+        )}
+      </div>
+
+      {/* List */}
+      {isLoading ? (
+        <p className="text-sm text-gray-400">Loading keywords…</p>
+      ) : keywords.length === 0 ? (
+        <p className="text-sm text-gray-400">No keyword alerts configured. Add one above.</p>
+      ) : (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Keyword</th>
+                <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Category</th>
+                <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Active</th>
+                <th className="px-4 py-2.5 w-10"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {keywords.map((kw: KeywordAlert) => (
+                <tr key={kw.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-4 py-2.5 font-medium text-gray-900">{kw.keyword}</td>
+                  <td className="px-4 py-2.5">
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                      kw.category === "COMPETITOR" ? "bg-orange-100 text-orange-700" :
+                      kw.category === "PROHIBITED" ? "bg-red-100 text-red-700" :
+                      kw.category === "COMPLIANCE" ? "bg-blue-100 text-blue-700" :
+                      "bg-gray-100 text-gray-700"
+                    }`}>
+                      {kw.category}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5 text-center">
+                    <button
+                      onClick={() => toggleMutation.mutate({ id: kw.id, is_active: !kw.is_active })}
+                      className="text-gray-500 hover:text-brand-600 transition-colors"
+                    >
+                      {kw.is_active
+                        ? <ToggleRight size={20} className="text-emerald-500" />
+                        : <ToggleLeft size={20} className="text-gray-400" />}
+                    </button>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Delete keyword "${kw.keyword}"?`)) {
+                          deleteMutation.mutate(kw.id);
+                        }
+                      }}
+                      className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type SettingsTab = "scripts" | "keywords";
+
 export default function SettingsPage() {
   const user = useAuthStore((s) => s.user);
   const isManager = user?.role === "ADMIN" || user?.role === "MANAGER";
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("scripts");
 
   const { data: scripts = [], isLoading } = useQuery({
     queryKey: ["scripts"],
@@ -189,9 +329,31 @@ export default function SettingsPage() {
   return (
     <div className="p-8 max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold text-gray-900 mb-1">Settings</h1>
-      <p className="text-sm text-gray-500 mb-6">Manage sales scripts and scoring rubrics.</p>
+      <p className="text-sm text-gray-500 mb-4">Manage sales scripts and keyword alerts.</p>
 
-      <div className="flex gap-6">
+      {/* Tab switcher */}
+      <div className="flex gap-1 mb-6 border-b border-gray-200">
+        <button
+          onClick={() => setSettingsTab("scripts")}
+          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            settingsTab === "scripts" ? "border-brand-600 text-brand-600" : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <FileText size={14} /> Scripts
+        </button>
+        <button
+          onClick={() => setSettingsTab("keywords")}
+          className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            settingsTab === "keywords" ? "border-brand-600 text-brand-600" : "border-transparent text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <Bell size={14} /> Keyword Alerts
+        </button>
+      </div>
+
+      {settingsTab === "keywords" && <KeywordAlertsPanel />}
+
+      {settingsTab === "scripts" && <div className="flex gap-6">
         {/* Script list */}
         <div className="w-56 flex-shrink-0">
           <div className="flex items-center justify-between mb-3">
@@ -257,7 +419,7 @@ export default function SettingsPage() {
             </>
           )}
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

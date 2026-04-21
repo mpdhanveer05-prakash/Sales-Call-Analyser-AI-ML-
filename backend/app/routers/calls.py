@@ -20,6 +20,7 @@ from app.schemas.coaching import CoachingClipOut, ObjectionOut
 from app.schemas.transcript import TranscriptOut, TranscriptSegmentOut
 from app.schemas.scores import CallScoresOut, SpeechScoreOut, SalesScoreOut
 from app.schemas.summary import SummaryOut
+from app.schemas.dashboard import CallAnalyticsOut
 from app.models.transcript import Transcript
 from app.models.scores import SpeechScore, SalesScore
 from app.models.summary import Summary
@@ -423,6 +424,7 @@ async def get_call_summary(
         coaching_suggestions=summary.coaching_suggestions or [],
         disposition_confidence=float(summary.disposition_confidence) if summary.disposition_confidence else None,
         disposition_reasoning=summary.disposition_reasoning,
+        sentiment_timeline=summary.sentiment_timeline or [],
         created_at=summary.created_at,
     )
 
@@ -615,3 +617,72 @@ async def bulk_delete_calls(
         deleted += 1
     await db.commit()
     return {"deleted": deleted}
+
+
+# ---------------------------------------------------------------------------
+# Analytics endpoint — derived on-the-fly from transcript segments
+# ---------------------------------------------------------------------------
+
+@router.get("/{call_id}/analytics", response_model=CallAnalyticsOut)
+async def get_call_analytics(
+    call_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CallAnalyticsOut:
+    call_result = await db.execute(
+        select(Call).options(selectinload(Call.agent)).where(Call.id == call_id)
+    )
+    call = call_result.scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Call not found")
+
+    if current_user.role == UserRole.AGENT:
+        agent_result = await db.execute(select(Agent).where(Agent.user_id == current_user.id))
+        own_agent = agent_result.scalar_one_or_none()
+        if not own_agent or call.agent_id != own_agent.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    elif current_user.role == UserRole.MANAGER and current_user.team_id:
+        if call.agent and call.agent.team_id != current_user.team_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    transcript_result = await db.execute(
+        select(Transcript)
+        .options(joinedload(Transcript.segments))
+        .where(Transcript.call_id == call_id)
+    )
+    transcript = transcript_result.unique().scalar_one_or_none()
+    if transcript is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transcript not yet available")
+
+    segs = sorted(transcript.segments, key=lambda s: s.start_ms)
+
+    agent_ms = sum(s.end_ms - s.start_ms for s in segs if s.speaker == "AGENT")
+    customer_ms = sum(s.end_ms - s.start_ms for s in segs if s.speaker == "CUSTOMER")
+    total_ms = agent_ms + customer_ms
+    talk_ratio = round(agent_ms / total_ms, 3) if total_ms > 0 else 0.0
+
+    # Silences: gaps > 1000 ms between consecutive segments
+    silence_count = 0
+    silence_total_ms = 0
+    for i in range(1, len(segs)):
+        gap = segs[i].start_ms - segs[i - 1].end_ms
+        if gap > 1000:
+            silence_count += 1
+            silence_total_ms += gap
+
+    # Interruptions: segment starts before previous ends AND speaker changes
+    interruption_count = 0
+    for i in range(1, len(segs)):
+        if segs[i].start_ms < segs[i - 1].end_ms and segs[i].speaker != segs[i - 1].speaker:
+            interruption_count += 1
+
+    return CallAnalyticsOut(
+        call_id=call_id,
+        agent_seconds=round(agent_ms / 1000, 1),
+        customer_seconds=round(customer_ms / 1000, 1),
+        total_seconds=round(total_ms / 1000, 1),
+        talk_ratio=talk_ratio,
+        silence_count=silence_count,
+        silence_total_seconds=round(silence_total_ms / 1000, 1),
+        interruption_count=interruption_count,
+    )

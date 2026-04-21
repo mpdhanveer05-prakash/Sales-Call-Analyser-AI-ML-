@@ -8,6 +8,7 @@ import CallDetailPage from "@/pages/CallDetailPage";
 import SettingsPage from "@/pages/SettingsPage";
 import SearchPage from "@/pages/SearchPage";
 import AgentScorecardPage from "@/pages/AgentScorecardPage";
+import AgentComparePage from "@/pages/AgentComparePage";
 import TeamDashboardPage from "@/pages/TeamDashboardPage";
 import Layout from "@/components/Layout";
 
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="settings" element={<SettingsPage />} />
           <Route path="search" element={<SearchPage />} />
           <Route path="agents/:id" element={<AgentScorecardPage />} />
+          <Route path="compare" element={<AgentComparePage />} />
           <Route path="dashboard" element={<TeamDashboardPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/calls" replace />} />
