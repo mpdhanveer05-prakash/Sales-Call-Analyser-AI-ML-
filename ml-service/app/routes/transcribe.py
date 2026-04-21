@@ -61,9 +61,21 @@ def _get_whisper_model():
         compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
         cache_dir = os.getenv("MODEL_CACHE_DIR", "/app/model_cache")
         logger.info("Loading Whisper '%s' on %s (%s)", model_size, device, compute_type)
-        _whisper_model = WhisperModel(
-            model_size, device=device, compute_type=compute_type, download_root=cache_dir,
-        )
+        try:
+            _whisper_model = WhisperModel(
+                model_size, device=device, compute_type=compute_type, download_root=cache_dir,
+            )
+        except (RuntimeError, Exception) as exc:
+            if device != "cpu":
+                logger.warning(
+                    "Whisper failed on %s (%s): %s — falling back to CPU/int8",
+                    device, compute_type, exc,
+                )
+                _whisper_model = WhisperModel(
+                    model_size, device="cpu", compute_type="int8", download_root=cache_dir,
+                )
+            else:
+                raise
         logger.info("Whisper model loaded")
     return _whisper_model
 
