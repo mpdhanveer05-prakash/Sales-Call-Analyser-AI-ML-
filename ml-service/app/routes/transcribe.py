@@ -10,10 +10,16 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["transcription"])
 
-# Lazy-loaded globals — initialised once on first request
 _whisper_model = None
 _pyannote_pipeline = None
 _pyannote_attempted = False
+
+VOICEMAIL_PHRASES = [
+    "leave your message", "leave a message", "after the tone", "after the beep",
+    "not available", "you have reached", "please leave", "record your message",
+    "cannot take your call", "is not available", "mailbox", "in count of",
+    "tone to begin", "at the beep", "record after", "press any key",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -39,154 +45,222 @@ class TranscribeResponse(BaseModel):
     segments: list[TranscriptSegment]
     language: str
     duration_seconds: float
+    call_type: str = "LIVE"   # LIVE | VOICEMAIL | NO_ANSWER
 
 
 # ---------------------------------------------------------------------------
-# Model helpers
+# Whisper model loader
 # ---------------------------------------------------------------------------
 
 def _get_whisper_model():
     global _whisper_model
     if _whisper_model is None:
         from faster_whisper import WhisperModel
-
-        model_size = os.getenv("WHISPER_MODEL_SIZE", "base")
+        model_size = os.getenv("WHISPER_MODEL_SIZE", "small")
         device = os.getenv("WHISPER_DEVICE", "cpu")
         compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
         cache_dir = os.getenv("MODEL_CACHE_DIR", "/app/model_cache")
-
-        logger.info("Loading Whisper model '%s' on %s (%s)", model_size, device, compute_type)
+        logger.info("Loading Whisper '%s' on %s (%s)", model_size, device, compute_type)
         _whisper_model = WhisperModel(
-            model_size,
-            device=device,
-            compute_type=compute_type,
-            download_root=cache_dir,
+            model_size, device=device, compute_type=compute_type, download_root=cache_dir,
         )
         logger.info("Whisper model loaded")
     return _whisper_model
 
 
-def _get_pyannote_pipeline(min_speakers: int, max_speakers: int):
+def _base_transcribe_kwargs(language: Optional[str]) -> dict:
+    kwargs: dict = {
+        "beam_size": 5,
+        "word_timestamps": True,
+        "vad_filter": True,
+        "vad_parameters": {"min_silence_duration_ms": 300, "speech_pad_ms": 200},
+        "condition_on_previous_text": False,
+        "no_speech_threshold": 0.6,
+        "log_prob_threshold": -1.0,
+        "compression_ratio_threshold": 2.4,
+    }
+    if language:
+        kwargs["language"] = language
+    return kwargs
+
+
+# ---------------------------------------------------------------------------
+# Stereo channel split  (Fix 1)
+# 3CX standard: left channel = outgoing (AGENT), right = incoming (CUSTOMER)
+# ---------------------------------------------------------------------------
+
+def _is_stereo(audio_path: str) -> bool:
+    try:
+        from pydub import AudioSegment
+        return AudioSegment.from_file(audio_path).channels == 2
+    except Exception as exc:
+        logger.warning("Stereo check failed: %s", exc)
+        return False
+
+
+def _transcribe_stereo(
+    audio_path: str, model, kwargs: dict, tmpdir: str
+) -> tuple[list[TranscriptSegment], str, float]:
+    """
+    Split stereo audio, transcribe each channel independently.
+    Left channel → AGENT, Right channel → CUSTOMER.
+    Eliminates speaker diarization guesswork entirely.
+    """
+    from pydub import AudioSegment
+
+    audio = AudioSegment.from_file(audio_path)
+    channels = audio.split_to_mono()
+    duration_seconds = len(audio) / 1000.0
+    segments: list[TranscriptSegment] = []
+    language = "en"
+
+    for channel_audio, speaker in zip(channels, ["AGENT", "CUSTOMER"]):
+        channel_path = f"{tmpdir}/{speaker.lower()}.wav"
+        channel_audio.export(channel_path, format="wav")
+        segs_iter, info = model.transcribe(channel_path, **kwargs)
+        if speaker == "AGENT":
+            language = info.language
+        for seg in segs_iter:
+            if not seg.text.strip():
+                continue
+            avg_conf = (
+                sum(w.probability for w in seg.words) / len(seg.words)
+                if seg.words else 0.9
+            )
+            segments.append(TranscriptSegment(
+                speaker=speaker,
+                start_ms=int(seg.start * 1000),
+                end_ms=int(seg.end * 1000),
+                text=seg.text.strip(),
+                confidence=round(avg_conf, 4),
+            ))
+
+    segments.sort(key=lambda s: s.start_ms)
+    logger.info("Stereo split complete — AGENT segs: %d, CUSTOMER segs: %d",
+                sum(1 for s in segments if s.speaker == "AGENT"),
+                sum(1 for s in segments if s.speaker == "CUSTOMER"))
+    return segments, language, duration_seconds
+
+
+# ---------------------------------------------------------------------------
+# Mono heuristic (fallback when audio is mono)
+# ---------------------------------------------------------------------------
+
+def _transcribe_mono(
+    audio_path: str, model, kwargs: dict
+) -> tuple[list[TranscriptSegment], str, float]:
+    segs_iter, info = model.transcribe(audio_path, **kwargs)
+    whisper_segments = [s for s in segs_iter if s.text.strip()]
+
+    pipeline = _get_pyannote_pipeline()
+    if pipeline is not None:
+        try:
+            diarization = pipeline(audio_path)
+            segments = _assign_speakers_pyannote(whisper_segments, diarization)
+            logger.info("Pyannote diarization applied")
+            return segments, info.language, round(info.duration, 2)
+        except Exception as exc:
+            logger.warning("Pyannote failed: %s — using heuristic", exc)
+
+    segments = _assign_speakers_heuristic(whisper_segments)
+    return segments, info.language, round(info.duration, 2)
+
+
+def _get_pyannote_pipeline():
     global _pyannote_pipeline, _pyannote_attempted
     if _pyannote_attempted:
         return _pyannote_pipeline
-
     _pyannote_attempted = True
     hf_token = os.getenv("HUGGINGFACE_TOKEN", "").strip()
     if not hf_token:
-        logger.info("HUGGINGFACE_TOKEN not set — using heuristic speaker assignment")
+        logger.info("HUGGINGFACE_TOKEN not set — mono calls use heuristic speaker assignment")
         return None
-
     try:
         from pyannote.audio import Pipeline
-
-        logger.info("Loading Pyannote speaker diarization pipeline")
         _pyannote_pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token,
+            "pyannote/speaker-diarization-3.1", use_auth_token=hf_token,
         )
         logger.info("Pyannote pipeline loaded")
     except Exception as exc:
-        logger.warning("Failed to load Pyannote pipeline: %s — using heuristic", exc)
-        _pyannote_pipeline = None
-
+        logger.warning("Pyannote load failed: %s", exc)
     return _pyannote_pipeline
 
 
-# ---------------------------------------------------------------------------
-# Speaker assignment helpers
-# ---------------------------------------------------------------------------
-
-def _assign_speakers_pyannote(
-    whisper_segments: list,
-    diarization,
-    min_speakers: int,
-    max_speakers: int,
-) -> list[TranscriptSegment]:
-    """Map Pyannote diarization turns onto Whisper segments."""
+def _assign_speakers_pyannote(whisper_segments: list, diarization) -> list[TranscriptSegment]:
     turn_list = list(diarization.itertracks(yield_label=True))
-
     unique_speakers: list[str] = []
     for _, _, spk in turn_list:
         if spk not in unique_speakers:
             unique_speakers.append(spk)
-
-    speaker_label = {spk: ("AGENT" if i == 0 else "CUSTOMER") for i, spk in enumerate(unique_speakers[:2])}
-
+    label_map = {spk: ("AGENT" if i == 0 else "CUSTOMER") for i, spk in enumerate(unique_speakers[:2])}
     result: list[TranscriptSegment] = []
     for seg in whisper_segments:
-        seg_start, seg_end = seg.start, seg.end
         best_label = "AGENT"
         best_overlap = -1.0
-
         for turn, _, spk in turn_list:
-            overlap = min(turn.end, seg_end) - max(turn.start, seg_start)
+            overlap = min(turn.end, seg.end) - max(turn.start, seg.start)
             if overlap > best_overlap:
                 best_overlap = overlap
-                best_label = speaker_label.get(spk, "AGENT")
-
-        avg_conf = (
-            sum(w.probability for w in seg.words) / len(seg.words)
-            if seg.words else 0.9
-        )
+                best_label = label_map.get(spk, "AGENT")
+        avg_conf = sum(w.probability for w in seg.words) / len(seg.words) if seg.words else 0.9
         result.append(TranscriptSegment(
-            speaker=best_label,
-            start_ms=int(seg_start * 1000),
-            end_ms=int(seg_end * 1000),
-            text=seg.text.strip(),
-            confidence=round(avg_conf, 4),
+            speaker=best_label, start_ms=int(seg.start * 1000), end_ms=int(seg.end * 1000),
+            text=seg.text.strip(), confidence=round(avg_conf, 4),
         ))
     return result
 
 
 def _assign_speakers_heuristic(whisper_segments: list) -> list[TranscriptSegment]:
     """
-    Turn-taking heuristic for 2-speaker outbound phone calls.
-    Alternates speakers on pauses >= PAUSE_THRESHOLD seconds.
-    The speaker with the most total talk time is labelled AGENT — more
-    robust than assuming the first speaker is the agent, because in 3CX
-    recordings the customer often answers first ("Hello?").
+    Turn-taking heuristic. Speaker with the most total talk time → AGENT
+    (outbound sales agents talk more than customers).
     """
     PAUSE_THRESHOLD = 0.8
-
     provisional: list[dict] = []
     spk_idx = 0
     prev_end = 0.0
 
     for seg in whisper_segments:
-        gap = seg.start - prev_end
-        if gap >= PAUSE_THRESHOLD and prev_end > 0:
+        if seg.start - prev_end >= PAUSE_THRESHOLD and prev_end > 0:
             spk_idx = 1 - spk_idx
-
-        avg_conf = (
-            sum(w.probability for w in seg.words) / len(seg.words)
-            if seg.words else 0.9
-        )
+        avg_conf = sum(w.probability for w in seg.words) / len(seg.words) if seg.words else 0.9
         provisional.append({
-            "spk": spk_idx,
-            "start_ms": int(seg.start * 1000),
-            "end_ms": int(seg.end * 1000),
-            "text": seg.text.strip(),
-            "confidence": round(avg_conf, 4),
+            "spk": spk_idx, "start_ms": int(seg.start * 1000), "end_ms": int(seg.end * 1000),
+            "text": seg.text.strip(), "confidence": round(avg_conf, 4),
         })
         prev_end = seg.end
 
-    # Determine which provisional index is the AGENT: the one with more
-    # total speaking time (outbound sales agents talk more than customers).
-    time_0 = sum((s["end_ms"] - s["start_ms"]) for s in provisional if s["spk"] == 0)
-    time_1 = sum((s["end_ms"] - s["start_ms"]) for s in provisional if s["spk"] == 1)
+    time_0 = sum(s["end_ms"] - s["start_ms"] for s in provisional if s["spk"] == 0)
+    time_1 = sum(s["end_ms"] - s["start_ms"] for s in provisional if s["spk"] == 1)
     agent_spk = 0 if time_0 >= time_1 else 1
 
     return [
         TranscriptSegment(
             speaker="AGENT" if s["spk"] == agent_spk else "CUSTOMER",
-            start_ms=s["start_ms"],
-            end_ms=s["end_ms"],
-            text=s["text"],
-            confidence=s["confidence"],
+            start_ms=s["start_ms"], end_ms=s["end_ms"],
+            text=s["text"], confidence=s["confidence"],
         )
         for s in provisional
     ]
+
+
+# ---------------------------------------------------------------------------
+# Voicemail / no-answer detection  (Fix 2)
+# ---------------------------------------------------------------------------
+
+def _detect_call_type(segments: list[TranscriptSegment], duration_seconds: float) -> str:
+    if not segments:
+        return "NO_ANSWER"
+
+    early_text = " ".join(s.text.lower() for s in segments if s.start_ms < 60000)
+    for phrase in VOICEMAIL_PHRASES:
+        if phrase in early_text:
+            return "VOICEMAIL"
+
+    if duration_seconds < 20:
+        return "NO_ANSWER"
+
+    return "LIVE"
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +269,6 @@ def _assign_speakers_heuristic(whisper_segments: list) -> list[TranscriptSegment
 
 @router.post("/transcribe", response_model=TranscribeResponse)
 async def transcribe_audio(request: TranscribeRequest) -> TranscribeResponse:
-    # Download audio from MinIO
     minio_client = Minio(
         os.getenv("MINIO_ENDPOINT", "minio:9000"),
         access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
@@ -205,7 +278,6 @@ async def transcribe_audio(request: TranscribeRequest) -> TranscribeResponse:
     bucket = os.getenv("MINIO_BUCKET_RECORDINGS", "call-recordings")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Preserve extension so ffmpeg can detect format
         ext = request.minio_path.rsplit(".", 1)[-1] if "." in request.minio_path else "wav"
         audio_path = f"{tmpdir}/audio.{ext}"
 
@@ -213,50 +285,27 @@ async def transcribe_audio(request: TranscribeRequest) -> TranscribeResponse:
             minio_client.fget_object(bucket, request.minio_path, audio_path)
         except Exception as exc:
             logger.error("MinIO download failed for %s: %s", request.minio_path, exc)
-            raise HTTPException(status_code=404, detail=f"Audio file not found in storage: {exc}")
+            raise HTTPException(status_code=404, detail=f"Audio file not found: {exc}")
 
-        # Run transcription
         model = _get_whisper_model()
-        transcribe_kwargs: dict = {
-            "beam_size": 5,
-            "word_timestamps": True,
-            "vad_filter": True,
-            "vad_parameters": {"min_silence_duration_ms": 300, "speech_pad_ms": 200},
-            "condition_on_previous_text": False,  # prevents hallucination loops
-            "no_speech_threshold": 0.6,
-            "log_prob_threshold": -1.0,
-            "compression_ratio_threshold": 2.4,
-        }
-        if request.language:
-            transcribe_kwargs["language"] = request.language
+        kwargs = _base_transcribe_kwargs(request.language)
 
-        logger.info("Transcribing %s", request.minio_path)
-        segments_iter, info = model.transcribe(audio_path, **transcribe_kwargs)
-        whisper_segments = [s for s in segments_iter if s.text.strip()]
-        logger.info("Transcription done: %.1fs, lang=%s, %d segments", info.duration, info.language, len(whisper_segments))
-
-        # Speaker diarization
-        pipeline = _get_pyannote_pipeline(request.min_speakers, request.max_speakers)
-
-        if pipeline is not None:
-            try:
-                diarization = pipeline(
-                    audio_path,
-                    min_speakers=request.min_speakers,
-                    max_speakers=request.max_speakers,
-                )
-                segments = _assign_speakers_pyannote(
-                    whisper_segments, diarization, request.min_speakers, request.max_speakers
-                )
-                logger.info("Pyannote diarization applied")
-            except Exception as exc:
-                logger.warning("Pyannote diarization error: %s — falling back to heuristic", exc)
-                segments = _assign_speakers_heuristic(whisper_segments)
+        if _is_stereo(audio_path):
+            logger.info("Stereo audio — using channel-based speaker attribution (Fix 1)")
+            segments, language, duration_seconds = _transcribe_stereo(
+                audio_path, model, kwargs, tmpdir
+            )
         else:
-            segments = _assign_speakers_heuristic(whisper_segments)
+            logger.info("Mono audio — using heuristic/pyannote speaker assignment")
+            segments, language, duration_seconds = _transcribe_mono(audio_path, model, kwargs)
+
+        call_type = _detect_call_type(segments, duration_seconds)
+        logger.info("Transcription done: %.1fs, lang=%s, %d segs, call_type=%s",
+                    duration_seconds, language, len(segments), call_type)
 
         return TranscribeResponse(
             segments=segments,
-            language=info.language,
-            duration_seconds=round(info.duration, 2),
+            language=language,
+            duration_seconds=round(duration_seconds, 2),
+            call_type=call_type,
         )

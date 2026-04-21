@@ -468,7 +468,213 @@ def extract_objections(segments: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Combined analysis — single LLM call for all outputs (6x faster on CPU)
+# Summary-only LLM call  (Fix 4)
+# Signal scoring handles dimensions; LLM handles narrative + disposition only.
+# Output is ~500 tokens vs ~1500 for the old full combined call.
+# ---------------------------------------------------------------------------
+
+_SUMMARY_ONLY_SYSTEM = (
+    "You are a senior sales manager reviewing a recorded call. "
+    "Provide concise, actionable insights. Output valid JSON only."
+)
+
+_SUMMARY_ONLY_PROMPT = """Analyze this {call_type} sales call.
+
+TRANSCRIPT:
+{transcript}
+
+DISPOSITION CODES (pick exactly one):
+{codes}
+
+Return ONLY this JSON:
+{{
+  "summary": {{
+    "executive_summary": "2-3 sentence summary of call outcome",
+    "key_moments": ["moment 1", "moment 2", "moment 3"],
+    "coaching_suggestions": ["coaching tip 1", "tip 2", "tip 3"]
+  }},
+  "disposition": {{"disposition": "ONE_CODE", "confidence": 0.85, "reasoning": "one sentence"}},
+  "coaching_moments": [
+    {{"start_ms": 0, "end_ms": 30000, "category": "greeting", "reason": "coaching reason"}}
+  ],
+  "objections": [
+    {{"timestamp_ms": 0, "objection_type": "PRICE", "quote": "exact quote", "resolved": false}}
+  ],
+  "sentiment_timeline": [
+    {{"phase": "Opening",   "start_ms": 0,      "end_ms": 60000,  "sentiment": "neutral", "score": 0.5, "evidence": "reason"}},
+    {{"phase": "Discovery", "start_ms": 60000,  "end_ms": 180000, "sentiment": "neutral", "score": 0.5, "evidence": "reason"}},
+    {{"phase": "Pitch",     "start_ms": 180000, "end_ms": 300000, "sentiment": "neutral", "score": 0.5, "evidence": "reason"}},
+    {{"phase": "Objection", "start_ms": 300000, "end_ms": 420000, "sentiment": "neutral", "score": 0.5, "evidence": "reason"}},
+    {{"phase": "Closing",   "start_ms": 420000, "end_ms": 999999, "sentiment": "neutral", "score": 0.5, "evidence": "reason"}}
+  ]
+}}"""
+
+_VOICEMAIL_SUMMARY_PROMPT = """The agent left a voicemail (customer did not answer).
+
+VOICEMAIL TRANSCRIPT:
+{transcript}
+
+Return ONLY this JSON:
+{{
+  "summary": {{
+    "executive_summary": "2-3 sentences about the voicemail quality",
+    "key_moments": ["voicemail key point"],
+    "coaching_suggestions": ["Did agent leave name?", "Did agent leave callback number?", "Was message clear and concise?"]
+  }},
+  "disposition": {{"disposition": "VOICEMAIL", "confidence": 1.0, "reasoning": "Customer did not answer — agent left voicemail"}},
+  "coaching_moments": [],
+  "objections": [],
+  "sentiment_timeline": []
+}}"""
+
+
+def analyze_call_summary(segments: list[dict], call_type: str = "LIVE") -> dict:
+    """
+    LLM call for narrative analysis only (summary, disposition, coaching, sentiment).
+    Sales dimension scores are computed separately by signal_scoring.compute_scores().
+    ~3x faster than the old combined call.
+    """
+    transcript = format_transcript(segments, max_words=1000)
+
+    if call_type in ("VOICEMAIL", "NO_ANSWER"):
+        if not transcript.strip():
+            return _default_voicemail_summary(call_type)
+        prompt = _VOICEMAIL_SUMMARY_PROMPT.format(transcript=transcript)
+    else:
+        prompt = _SUMMARY_ONLY_PROMPT.format(
+            call_type=call_type,
+            transcript=transcript,
+            codes="\n".join(DISPOSITION_CODES),
+        )
+
+    try:
+        raw = _call_llm(prompt, _SUMMARY_ONLY_SYSTEM, max_tokens=800)
+    except Exception as exc:
+        logger.warning("LLM summary failed: %s — using defaults", exc)
+        return _default_voicemail_summary(call_type) if call_type != "LIVE" else _default_live_summary()
+
+    # --- Summary ---
+    raw_sum = raw.get("summary", {})
+    summary = {
+        "executive_summary": str(raw_sum.get("executive_summary", "Summary not available.")),
+        "key_moments": [str(m) for m in raw_sum.get("key_moments", [])[:10]],
+        "coaching_suggestions": [str(s) for s in raw_sum.get("coaching_suggestions", [])[:10]],
+    }
+
+    # --- Disposition ---
+    raw_disp = raw.get("disposition", {})
+    disp_code = str(raw_disp.get("disposition", "OTHER")).upper().strip()
+    if disp_code not in DISPOSITION_CODES:
+        disp_code = "VOICEMAIL" if call_type == "VOICEMAIL" else "OTHER"
+    try:
+        confidence = max(0.0, min(1.0, float(raw_disp.get("confidence", 0.5))))
+    except (TypeError, ValueError):
+        confidence = 0.5
+    disposition = {
+        "disposition": disp_code,
+        "confidence": round(confidence, 3),
+        "reasoning": str(raw_disp.get("reasoning", "")),
+    }
+
+    # --- Coaching moments ---
+    coaching_moments: list[dict] = []
+    for item in (raw.get("coaching_moments", []) or [])[:10]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            start_ms = int(item.get("start_ms", 0))
+            end_ms = int(item.get("end_ms", 0))
+        except (TypeError, ValueError):
+            continue
+        category = str(item.get("category", "missed_opportunity")).lower().strip()
+        if category not in COACHING_CATEGORIES:
+            category = "missed_opportunity"
+        reason = str(item.get("reason", "")).strip()
+        if reason:
+            coaching_moments.append({"start_ms": start_ms, "end_ms": end_ms,
+                                     "category": category, "reason": reason})
+
+    # --- Objections ---
+    objections: list[dict] = []
+    for item in (raw.get("objections", []) or [])[:20]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            timestamp_ms = int(item.get("timestamp_ms", 0))
+        except (TypeError, ValueError):
+            timestamp_ms = 0
+        obj_type = str(item.get("objection_type", "OTHER")).upper().strip()
+        if obj_type not in OBJECTION_TYPES:
+            obj_type = "OTHER"
+        quote = str(item.get("quote", "")).strip()
+        if not quote:
+            continue
+        resolved_raw = item.get("resolved", False)
+        resolved = bool(resolved_raw) if isinstance(resolved_raw, bool) else str(resolved_raw).lower() == "true"
+        objections.append({"timestamp_ms": timestamp_ms, "objection_type": obj_type,
+                           "quote": quote, "resolved": resolved})
+
+    # --- Sentiment timeline ---
+    sentiment_timeline: list[dict] = []
+    for p in (raw.get("sentiment_timeline", []) or [])[:10]:
+        if not isinstance(p, dict):
+            continue
+        sentiment = str(p.get("sentiment", "neutral")).lower()
+        if sentiment not in ("positive", "neutral", "negative"):
+            sentiment = "neutral"
+        try:
+            score = max(0.0, min(1.0, float(p.get("score", 0.5))))
+            start_ms = int(p.get("start_ms", 0))
+            end_ms = int(p.get("end_ms", 0))
+        except (TypeError, ValueError):
+            continue
+        sentiment_timeline.append({
+            "phase": str(p.get("phase", "Unknown")),
+            "start_ms": start_ms, "end_ms": end_ms,
+            "sentiment": sentiment, "score": round(score, 3),
+            "evidence": str(p.get("evidence", "")),
+        })
+
+    return {
+        "summary": summary,
+        "disposition": disposition,
+        "coaching_moments": coaching_moments,
+        "objections": objections,
+        "sentiment_timeline": sentiment_timeline,
+    }
+
+
+def _default_voicemail_summary(call_type: str) -> dict:
+    disp = "VOICEMAIL" if call_type == "VOICEMAIL" else "NO_ANSWER"
+    return {
+        "summary": {
+            "executive_summary": f"Call classified as {call_type}. No live customer conversation.",
+            "key_moments": [],
+            "coaching_suggestions": ["Ensure voicemail includes agent name and callback number."],
+        },
+        "disposition": {"disposition": disp, "confidence": 1.0, "reasoning": "Automated detection"},
+        "coaching_moments": [],
+        "objections": [],
+        "sentiment_timeline": [],
+    }
+
+
+def _default_live_summary() -> dict:
+    return {
+        "summary": {
+            "executive_summary": "Summary unavailable — LLM analysis failed.",
+            "key_moments": [],
+            "coaching_suggestions": [],
+        },
+        "disposition": {"disposition": "OTHER", "confidence": 0.5, "reasoning": "LLM unavailable"},
+        "coaching_moments": [],
+        "objections": [],
+        "sentiment_timeline": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Combined analysis — single LLM call for all outputs (kept for reference)
 # ---------------------------------------------------------------------------
 
 _COMBINED_SYSTEM = (

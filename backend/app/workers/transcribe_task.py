@@ -105,18 +105,29 @@ def transcribe_call_task(self, call_id: str) -> dict:
         segments = result["segments"]
         language = result["language"]
         duration_seconds = result["duration_seconds"]
+        call_type = result.get("call_type", "LIVE")
 
         _save_transcript(call_id, language, duration_seconds, segments)
+
+        # Early disposition for non-live calls (Fix 2)
+        if call_type in ("VOICEMAIL", "NO_ANSWER"):
+            with SyncSessionLocal() as db:
+                call_row = db.execute(select(Call).where(Call.id == UUID(call_id))).scalar_one_or_none()
+                if call_row:
+                    call_row.disposition = call_type
+                    db.commit()
+            logger.info("Call %s detected as %s — disposition set early", call_id, call_type)
+
         _update_call_status(call_id, CallStatus.ANALYZING)
 
         from app.workers.speech_score_task import speech_score_task
         speech_score_task.delay(call_id)
 
         logger.info(
-            "Transcription complete for call %s: %d segments, lang=%s — dispatched speech scoring",
-            call_id, len(segments), language,
+            "Transcription complete for call %s: %d segments, lang=%s, call_type=%s — dispatched speech scoring",
+            call_id, len(segments), language, call_type,
         )
-        return {"call_id": call_id, "segment_count": len(segments), "language": language}
+        return {"call_id": call_id, "segment_count": len(segments), "language": language, "call_type": call_type}
 
     except httpx.HTTPStatusError as exc:
         error_msg = f"ML service error: {exc.response.status_code} — {exc.response.text[:200]}"

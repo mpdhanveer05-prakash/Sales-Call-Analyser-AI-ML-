@@ -13,7 +13,7 @@ from app.models.scores import SalesScore
 from app.models.summary import Summary
 from app.models.transcript import Transcript
 from app.models.script import Script
-from app.services import ollama_service
+from app.services import ollama_service, signal_scoring
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -174,15 +174,29 @@ def sales_score_task(self, call_id: str) -> dict:
         if not segments:
             raise ValueError(f"No transcript segments for call {call_id}")
 
-        logger.info("Running combined LLM analysis for call %s (%d segments)", call_id, len(segments))
-        result = ollama_service.analyze_call_complete(segments, rubric)
+        # Detect call type from early disposition (set by transcribe_task) or re-detect
+        with SyncSessionLocal() as db:
+            call_row = db.execute(select(Call).where(Call.id == UUID(call_id))).scalar_one_or_none()
+            early_disposition = call_row.disposition if call_row else None
+        call_type = early_disposition if early_disposition in ("VOICEMAIL", "NO_ANSWER") else "LIVE"
 
-        sales_result = result["sales"]
-        summary_result = result["summary"]
-        disposition_result = result["disposition"]
-        coaching_moments = result["coaching_moments"]
-        objections = result["objections"]
-        sentiment_timeline = result["sentiment_timeline"]
+        # Fix 4: Signal-based scores (instant, deterministic, no LLM)
+        if call_type in ("VOICEMAIL", "NO_ANSWER"):
+            logger.info("Call %s is %s — using minimal scoring", call_id, call_type)
+            sales_result = signal_scoring._empty_scores(f"Not applicable — {call_type} call")
+        else:
+            logger.info("Computing signal-based sales scores for call %s (%d segments)", call_id, len(segments))
+            sales_result = signal_scoring.compute_scores(segments, rubric)
+
+        # Fix 2 + 4: LLM handles narrative only (summary, disposition, coaching, sentiment)
+        logger.info("Running LLM summary analysis for call %s (call_type=%s)", call_id, call_type)
+        llm_result = ollama_service.analyze_call_summary(segments, call_type=call_type)
+
+        summary_result = llm_result["summary"]
+        disposition_result = llm_result["disposition"]
+        coaching_moments = llm_result["coaching_moments"]
+        objections = llm_result["objections"]
+        sentiment_timeline = llm_result["sentiment_timeline"]
 
         _save_results(
             call_id, sales_result, summary_result, disposition_result,

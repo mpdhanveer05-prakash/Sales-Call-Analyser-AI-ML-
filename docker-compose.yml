@@ -166,10 +166,12 @@ services:
       # MinIO connection (Docker network — use service name not localhost)
       MINIO_ENDPOINT: minio:9000
       MINIO_SECURE: "false"
-      # Whisper model settings — change to large-v3 once GPU is confirmed
-      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
-      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
-      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      # Whisper model settings
+      # GPU machine: large-v3 + cuda + float16 (best accuracy, fast)
+      # CPU machine: set WHISPER_MODEL_SIZE=small, WHISPER_DEVICE=cpu, WHISPER_COMPUTE_TYPE=int8 in .env
+      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-large-v3}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cuda}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-float16}
       MODEL_CACHE_DIR: /app/model_cache
       # Optional: set HUGGINGFACE_TOKEN in .env to enable Pyannote diarization
       HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN:-}
@@ -177,6 +179,14 @@ services:
       LANGUAGETOOL_URL: http://languagetool:8010
     volumes:
       - ml_models:/app/model_cache
+    # --- GPU Support (requires NVIDIA driver + nvidia-container-toolkit on host) ---
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     depends_on:
       minio:
         condition: service_healthy
