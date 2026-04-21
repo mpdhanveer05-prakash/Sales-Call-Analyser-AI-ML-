@@ -1,0 +1,8 @@
+# Local development overrides — applied automatically on localhost.
+# This file is NOT committed if added to .gitignore, or committed as-is since it's safe.
+# On AWS: this file does not exist, so docker-compose.yml values (port 80) are used.
+
+services:
+  frontend:
+    ports:
+      - "5173:80"   # Access locally at http://localhost:5173

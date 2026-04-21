@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     max_upload_size_mb: int = 500
     allowed_audio_extensions: str = ".wav,.mp3,.m4a,.mp4,.ogg,.flac"
-    allowed_origins: str = "http://localhost:5173"
+    allowed_origins: str = "http://localhost:5173,http://localhost"
 
     # Seed credentials
     seed_admin_email: str = "admin@company.com"
