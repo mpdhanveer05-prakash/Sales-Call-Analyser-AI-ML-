@@ -1,0 +1,19 @@
+# GPU override — apply on machines with NVIDIA GPU + nvidia-container-toolkit installed.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile app up -d
+#
+# Requirements on host:
+#   - NVIDIA driver installed  (check: nvidia-smi)
+#   - nvidia-container-toolkit (check: nvidia-ctk --version)
+#   - .env must have: WHISPER_DEVICE=cuda, WHISPER_COMPUTE_TYPE=float16, WHISPER_MODEL_SIZE=large-v3
+
+services:
+  ml-service:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

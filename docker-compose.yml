@@ -179,14 +179,6 @@ services:
       LANGUAGETOOL_URL: http://languagetool:8010
     volumes:
       - ml_models:/app/model_cache
-    # --- GPU Support (requires NVIDIA driver + nvidia-container-toolkit on host) ---
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     depends_on:
       minio:
         condition: service_healthy
