@@ -7,9 +7,20 @@
 #   - NVIDIA driver installed  (check: nvidia-smi)
 #   - nvidia-container-toolkit (check: nvidia-ctk --version)
 #   - .env must have: WHISPER_DEVICE=cuda, WHISPER_COMPUTE_TYPE=float16, WHISPER_MODEL_SIZE=large-v3
+#
+# Tested on: g5.2xlarge (A10G 24 GB), g4dn.xlarge (T4 16 GB)
 
 services:
   ml-service:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ollama:
     deploy:
       resources:
         reservations:

@@ -269,7 +269,7 @@ def _detect_call_type(segments: list[TranscriptSegment], duration_seconds: float
         if phrase in early_text:
             return "VOICEMAIL"
 
-    if duration_seconds < 20:
+    if duration_seconds < 30:
         return "NO_ANSWER"
 
     return "LIVE"

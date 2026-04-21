@@ -509,6 +509,29 @@ Return ONLY this JSON:
   ]
 }}"""
 
+# Stripped-down prompt for short calls (< 90 s) — no sentiment, no objections, 1 coaching tip.
+# ~250 tokens output vs 800 for the full prompt. 3x faster on CPU.
+_SHORT_CALL_PROMPT = """This is a short sales call ({duration_s}s). Summarize and classify it.
+
+TRANSCRIPT:
+{transcript}
+
+DISPOSITION CODES (pick exactly one):
+{codes}
+
+Return ONLY this JSON:
+{{
+  "summary": {{
+    "executive_summary": "1-2 sentences about the call",
+    "key_moments": [],
+    "coaching_suggestions": ["one tip"]
+  }},
+  "disposition": {{"disposition": "ONE_CODE", "confidence": 0.85, "reasoning": "one sentence"}},
+  "coaching_moments": [],
+  "objections": [],
+  "sentiment_timeline": []
+}}"""
+
 _VOICEMAIL_SUMMARY_PROMPT = """The agent left a voicemail (customer did not answer).
 
 VOICEMAIL TRANSCRIPT:
@@ -532,7 +555,7 @@ def analyze_call_summary(segments: list[dict], call_type: str = "LIVE") -> dict:
     """
     LLM call for narrative analysis only (summary, disposition, coaching, sentiment).
     Sales dimension scores are computed separately by signal_scoring.compute_scores().
-    ~3x faster than the old combined call.
+    Short calls (< 90 s) use a stripped-down prompt: ~250 tokens vs 800.
     """
     transcript = format_transcript(segments, max_words=1000)
 
@@ -540,15 +563,29 @@ def analyze_call_summary(segments: list[dict], call_type: str = "LIVE") -> dict:
         if not transcript.strip():
             return _default_voicemail_summary(call_type)
         prompt = _VOICEMAIL_SUMMARY_PROMPT.format(transcript=transcript)
+        max_tokens = 300
     else:
-        prompt = _SUMMARY_ONLY_PROMPT.format(
-            call_type=call_type,
-            transcript=transcript,
-            codes="\n".join(DISPOSITION_CODES),
-        )
+        duration_ms = max((s["end_ms"] for s in segments), default=0) if segments else 0
+        duration_s = duration_ms // 1000
+        if duration_s < 90:
+            # Short call — use minimal prompt, no sentiment or objection analysis
+            logger.info("Short call (%ds) — using stripped-down LLM prompt (~250 tokens)", duration_s)
+            prompt = _SHORT_CALL_PROMPT.format(
+                duration_s=duration_s,
+                transcript=transcript,
+                codes="\n".join(DISPOSITION_CODES),
+            )
+            max_tokens = 300
+        else:
+            prompt = _SUMMARY_ONLY_PROMPT.format(
+                call_type=call_type,
+                transcript=transcript,
+                codes="\n".join(DISPOSITION_CODES),
+            )
+            max_tokens = 800
 
     try:
-        raw = _call_llm(prompt, _SUMMARY_ONLY_SYSTEM, max_tokens=800)
+        raw = _call_llm(prompt, _SUMMARY_ONLY_SYSTEM, max_tokens=max_tokens)
     except Exception as exc:
         logger.warning("LLM summary failed: %s — using defaults", exc)
         return _default_voicemail_summary(call_type) if call_type != "LIVE" else _default_live_summary()
