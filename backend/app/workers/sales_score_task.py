@@ -85,6 +85,7 @@ def _save_results(
     coaching_moments: list[dict],
     objections: list[dict],
     sentiment_timeline: list[dict] | None = None,
+    skip_sales_score: bool = False,
 ) -> None:
     with SyncSessionLocal() as db:
         for Model in (SalesScore, Summary):
@@ -103,20 +104,22 @@ def _save_results(
 
         db.flush()
 
-        dim = sales_result["dimension_scores"]
-        db.add(SalesScore(
-            call_id=UUID(call_id),
-            greeting=dim["greeting"],
-            rapport=dim["rapport"],
-            discovery=dim["discovery"],
-            value_explanation=dim["value_explanation"],
-            objection_handling=dim["objection_handling"],
-            script_adherence=dim["script_adherence"],
-            closing=dim["closing"],
-            compliance=dim["compliance"],
-            composite=sales_result["composite"],
-            details=sales_result["scores"],
-        ))
+        # Skip SalesScore row entirely for non-live calls (VOICEMAIL, NO_ANSWER)
+        if not skip_sales_score:
+            dim = sales_result["dimension_scores"]
+            db.add(SalesScore(
+                call_id=UUID(call_id),
+                greeting=dim["greeting"],
+                rapport=dim["rapport"],
+                discovery=dim["discovery"],
+                value_explanation=dim["value_explanation"],
+                objection_handling=dim["objection_handling"],
+                script_adherence=dim["script_adherence"],
+                closing=dim["closing"],
+                compliance=dim["compliance"],
+                composite=sales_result["composite"],
+                details=sales_result["scores"],
+            ))
 
         db.add(Summary(
             call_id=UUID(call_id),
@@ -149,14 +152,17 @@ def _save_results(
         call_result = db.execute(select(Call).where(Call.id == UUID(call_id)))
         call = call_result.scalar_one_or_none()
         if call:
-            call.sales_score = sales_result["composite"]
+            # sales_score stays null for VOICEMAIL/NO_ANSWER — frontend shows "N/A"
+            if not skip_sales_score:
+                call.sales_score = sales_result["composite"]
             call.disposition = disposition_result["disposition"]
 
         db.commit()
         logger.info(
-            "Saved sales scores for call %s — composite=%.1f, disposition=%s, "
-            "coaching_clips=%d, objections=%d",
-            call_id, sales_result["composite"], disposition_result["disposition"],
+            "Saved results for call %s — sales=%s, disposition=%s, clips=%d, objections=%d",
+            call_id,
+            f"{sales_result['composite']:.1f}" if not skip_sales_score else "N/A",
+            disposition_result["disposition"],
             len(coaching_moments), len(objections),
         )
 
@@ -201,6 +207,7 @@ def sales_score_task(self, call_id: str) -> dict:
         _save_results(
             call_id, sales_result, summary_result, disposition_result,
             coaching_moments, objections, sentiment_timeline,
+            skip_sales_score=(call_type in ("VOICEMAIL", "NO_ANSWER")),
         )
         _update_call_status(call_id, CallStatus.COMPLETED)
 
