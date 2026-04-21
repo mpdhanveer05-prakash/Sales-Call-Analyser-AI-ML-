@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     max_upload_size_mb: int = 500
     allowed_audio_extensions: str = ".wav,.mp3,.m4a,.mp4,.ogg,.flac"
+    allowed_origins: str = "http://localhost:5173"
 
     # Seed credentials
     seed_admin_email: str = "admin@company.com"
@@ -61,6 +62,10 @@ class Settings(BaseSettings):
     @property
     def allowed_extensions_set(self) -> set[str]:
         return set(self.allowed_audio_extensions.split(","))
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
 
     @property
     def max_upload_size_bytes(self) -> int:

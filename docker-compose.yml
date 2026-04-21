@@ -14,7 +14,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-sca_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_strong_password}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -28,7 +28,7 @@ services:
     image: redis:7-alpine
     container_name: sca-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -192,7 +192,7 @@ services:
       dockerfile: Dockerfile
     container_name: sca-frontend
     ports:
-      - "5173:5173"
+      - "80:80"
     env_file:
       - .env
     depends_on:
