@@ -1,5 +1,5 @@
-# NVIDIA CUDA 12.1 + cuDNN 8 — required for faster-whisper GPU inference (libcudnn_ops_infer.so.8)
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+# NVIDIA CUDA 12.4 + cuDNN 9 — required for faster-whisper GPU inference
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
