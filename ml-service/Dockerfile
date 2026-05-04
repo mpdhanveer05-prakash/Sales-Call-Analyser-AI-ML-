@@ -3,16 +3,14 @@ FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Python 3.11 via deadsnakes PPA + FFmpeg
-# Ubuntu 22.04 ships FFmpeg 4.4.x — safe, avoids the AV_OPT_TYPE_CHANNEL_LAYOUT API break in FFmpeg 5.1+
+# Python 3.11 is available in Ubuntu 22.04 default repos — no PPA needed
+# FFmpeg 4.4.x on Ubuntu 22.04 — safe, avoids the AV_OPT_TYPE_CHANNEL_LAYOUT API break in FFmpeg 5.1+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
-    curl \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-dev \
     python3.11-distutils \
+    python3-pip \
+    curl \
     ffmpeg \
     build-essential \
     pkg-config \
@@ -25,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libswscale-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set python3.11 as default
+# Set python3.11 as default and install pip for it
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
