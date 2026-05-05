@@ -343,6 +343,28 @@ async def transcribe_audio(request: TranscribeRequest) -> TranscribeResponse:
         logger.info("Transcription done: %.1fs, lang=%s, %d segs, call_type=%s",
                     duration_seconds, language, len(segments), call_type)
 
+        # For voicemail calls: relabel CUSTOMER segments before first AGENT speech as SYSTEM
+        # These are the ISP automated prompts ("Your call has been forwarded to voicemail...")
+        # not the actual customer speaking.
+        if call_type == "VOICEMAIL":
+            first_agent_ms = next(
+                (s.start_ms for s in segments if s.speaker == "AGENT"), None
+            )
+            segments = [
+                TranscriptSegment(
+                    speaker="SYSTEM" if (
+                        s.speaker == "CUSTOMER"
+                        and (first_agent_ms is None or s.start_ms < first_agent_ms)
+                    ) else s.speaker,
+                    start_ms=s.start_ms,
+                    end_ms=s.end_ms,
+                    text=s.text,
+                    confidence=s.confidence,
+                )
+                for s in segments
+            ]
+            logger.info("Voicemail: relabelled ISP prompts as SYSTEM speaker")
+
         return TranscribeResponse(
             segments=segments,
             language=language,
