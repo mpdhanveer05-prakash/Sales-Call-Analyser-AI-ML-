@@ -15,10 +15,21 @@ _pyannote_pipeline = None
 _pyannote_attempted = False
 
 VOICEMAIL_PHRASES = [
-    "leave your message", "leave a message", "after the tone", "after the beep",
-    "not available", "you have reached", "please leave", "record your message",
-    "cannot take your call", "is not available", "mailbox", "in count of",
-    "tone to begin", "at the beep", "record after", "press any key",
+    # Standard ISP voicemail prompts
+    "forwarded to voicemail", "forward to voicemail", "voicemail",
+    "leave your message", "leave a message",
+    "after the tone", "at the tone", "after the beep", "at the beep",
+    "not available", "is not available", "cannot take your call",
+    "you have reached", "please leave", "record your message", "please record",
+    "when you have finished", "hang up", "finished recording",
+    "tone to begin", "record after", "press any key",
+    "mailbox", "in count of",
+    # Common Indian ISP voicemail phrases (Airtel, Jio, BSNL, Vi)
+    "the number you are trying", "the person you are trying",
+    "the person you're trying", "currently not available",
+    "switched off", "out of coverage", "not reachable",
+    "please try again", "please try after",
+    "apna sandesh", "sandesh chod", "awaaz ke baad",
 ]
 
 
@@ -264,13 +275,30 @@ def _detect_call_type(segments: list[TranscriptSegment], duration_seconds: float
     if not segments:
         return "NO_ANSWER"
 
+    # Check full transcript (not just first 60s) — voicemail prompt can appear anywhere in short calls
+    full_text = " ".join(s.text.lower() for s in segments)
     early_text = " ".join(s.text.lower() for s in segments if s.start_ms < 60000)
+
     for phrase in VOICEMAIL_PHRASES:
         if phrase in early_text:
+            logger.info("Voicemail phrase detected: '%s'", phrase)
             return "VOICEMAIL"
+
+    # Also check full text for short calls (< 60s) where voicemail prompt fills entire call
+    if duration_seconds < 60:
+        for phrase in VOICEMAIL_PHRASES:
+            if phrase in full_text:
+                logger.info("Voicemail phrase detected in short call: '%s'", phrase)
+                return "VOICEMAIL"
 
     if duration_seconds < 30:
         return "NO_ANSWER"
+
+    # If only one speaker (no agent speech detected) in a short call, likely voicemail
+    agent_segs = [s for s in segments if s.speaker == "AGENT"]
+    if not agent_segs and duration_seconds < 120:
+        logger.info("No agent speech in short call — classifying as VOICEMAIL")
+        return "VOICEMAIL"
 
     return "LIVE"
 
