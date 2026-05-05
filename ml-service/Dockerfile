@@ -1,12 +1,14 @@
 # Stage 1: extract CUDA + cuDNN runtime libraries only — no apt-get needed
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04 AS cuda-libs
+# CUDA 11.8: faster-whisper 0.10.x uses CTranslate2 3.x which requires libcublas.so.11
+# T4 (g4dn) and A10G (g5) both support CUDA 11.8
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 AS cuda-libs
 
 # Stage 2: main build — python:3.11-slim-bullseye (all pip layers already cached)
 # cuDNN libraries are copied in from stage 1, no Ubuntu apt-get slowness
 FROM python:3.11-slim-bullseye
 
 # Copy CUDA runtime + cuDNN + cuBLAS libraries from stage 1
-COPY --from=cuda-libs /usr/local/cuda-12.1/lib64/ /usr/local/cuda/lib64/
+COPY --from=cuda-libs /usr/local/cuda-11.8/lib64/ /usr/local/cuda/lib64/
 COPY --from=cuda-libs /usr/lib/x86_64-linux-gnu/libcudnn*.so* /usr/lib/x86_64-linux-gnu/
 COPY --from=cuda-libs /usr/lib/x86_64-linux-gnu/libcublas*.so* /usr/lib/x86_64-linux-gnu/
 COPY --from=cuda-libs /usr/lib/x86_64-linux-gnu/libcufft*.so* /usr/lib/x86_64-linux-gnu/
