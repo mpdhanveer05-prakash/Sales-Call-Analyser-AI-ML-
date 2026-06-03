@@ -13,6 +13,9 @@ router = APIRouter(tags=["transcription"])
 _whisper_model = None
 _pyannote_pipeline = None
 _pyannote_attempted = False
+_whisperx_align_model = None
+_whisperx_metadata = None
+_whisperx_attempted = False
 
 VOICEMAIL_PHRASES = [
     # Standard ISP voicemail prompts
@@ -304,6 +307,66 @@ def _detect_call_type(segments: list[TranscriptSegment], duration_seconds: float
 
 
 # ---------------------------------------------------------------------------
+# Optional WhisperX wav2vec2 alignment — improves word-level timestamp accuracy
+# Enable by:  USE_WHISPERX_ALIGNMENT=true  and uncomment whisperx in requirements.txt
+# ---------------------------------------------------------------------------
+
+def _get_whisperx_align():
+    global _whisperx_align_model, _whisperx_metadata, _whisperx_attempted
+    if _whisperx_attempted:
+        return _whisperx_align_model, _whisperx_metadata
+    _whisperx_attempted = True
+    if os.getenv("USE_WHISPERX_ALIGNMENT", "false").lower() != "true":
+        return None, None
+    try:
+        import whisperx
+        device = os.getenv("WHISPER_DEVICE", "cuda")
+        _whisperx_align_model, _whisperx_metadata = whisperx.load_align_model(
+            language_code="en", device=device,
+        )
+        logger.info("WhisperX alignment model loaded on %s", device)
+    except Exception as exc:
+        logger.warning("WhisperX unavailable (%s) — using faster-whisper word timestamps", exc)
+    return _whisperx_align_model, _whisperx_metadata
+
+
+def _align_segments_whisperx(
+    segments: list[TranscriptSegment], audio_path: str
+) -> list[TranscriptSegment]:
+    """Refine word-level timestamps via wav2vec2 forced alignment.  No-op if disabled."""
+    align_model, metadata = _get_whisperx_align()
+    if align_model is None:
+        return segments
+    try:
+        import whisperx
+        device = os.getenv("WHISPER_DEVICE", "cuda")
+        wx_segments = [
+            {"start": s.start_ms / 1000.0, "end": s.end_ms / 1000.0, "text": s.text}
+            for s in segments
+        ]
+        result = whisperx.align(
+            wx_segments, align_model, metadata, audio_path, device=device,
+            return_char_alignments=False,
+        )
+        aligned = result.get("segments", [])
+        if len(aligned) != len(segments):
+            return segments
+        return [
+            TranscriptSegment(
+                speaker=orig.speaker,
+                start_ms=int(a.get("start", orig.start_ms / 1000) * 1000),
+                end_ms=int(a.get("end", orig.end_ms / 1000) * 1000),
+                text=orig.text,
+                confidence=orig.confidence,
+            )
+            for orig, a in zip(segments, aligned)
+        ]
+    except Exception as exc:
+        logger.warning("WhisperX align failed (%s) — using original timestamps", exc)
+        return segments
+
+
+# ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
 
@@ -338,6 +401,9 @@ async def transcribe_audio(request: TranscribeRequest) -> TranscribeResponse:
         else:
             logger.info("Mono audio — using heuristic/pyannote speaker assignment")
             segments, language, duration_seconds = _transcribe_mono(audio_path, model, kwargs)
+
+        # Optional WhisperX wav2vec2 alignment for more precise word timestamps
+        segments = _align_segments_whisperx(segments, audio_path)
 
         call_type = _detect_call_type(segments, duration_seconds)
         logger.info("Transcription done: %.1fs, lang=%s, %d segs, call_type=%s",

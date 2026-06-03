@@ -28,3 +28,7 @@ sentence-transformers==2.7.0
 # --- Optional: Pyannote speaker diarization ---
 # Requires HUGGINGFACE_TOKEN env var and a Pyannote gated model agreement.
 # pyannote.audio==3.1.1
+
+# --- Optional: WhisperX for forced word-level alignment ---
+# Adds ~500 MB VRAM for wav2vec2 alignment model. Enable via USE_WHISPERX_ALIGNMENT=true.
+# whisperx==3.1.1
