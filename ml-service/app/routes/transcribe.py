@@ -148,33 +148,61 @@ def _is_stereo(audio_path: str) -> bool:
         return False
 
 
+# Strong agent-introduction signals — phrases an agent says but customers virtually never do
+_AGENT_INTRO_PATTERNS = [
+    "this is",          # "This is Zahra with O'Connor"
+    "calling from",     # "Calling from O'Connor"
+    "calling regarding",
+    "calling about",
+    "this call regarding",
+    "regarding your",   # "regarding your property tax"
+    "with o'connor", "with oconnor",  # company-specific — adjust per deployment
+    "with the company",
+    "how are you today",
+    "do you have a moment",
+    "is this a good time",
+]
+
+
+def _score_agent_likelihood(channel_segments: list[dict]) -> float:
+    """Higher score = more likely to be the agent channel.
+
+    Combines: agent-intro phrase matches + total talk time (sales agents talk
+    more than customers on outbound, and lead the conversation on inbound too).
+    """
+    if not channel_segments:
+        return 0.0
+    text_lower = " ".join(s["text"].lower() for s in channel_segments)
+    intro_matches = sum(1 for pat in _AGENT_INTRO_PATTERNS if pat in text_lower)
+    total_ms = sum(s["end_ms"] - s["start_ms"] for s in channel_segments)
+    # Intro phrase match is the strongest signal — weight 10x talk time
+    return intro_matches * 10.0 + (total_ms / 1000.0)
+
+
 def _transcribe_stereo(
     audio_path: str, model, kwargs: dict, tmpdir: str
 ) -> tuple[list[TranscriptSegment], str, float]:
     """
-    Split stereo audio, transcribe each channel independently.
-    Default: Left channel → AGENT, Right channel → CUSTOMER (3CX standard).
-    Set STEREO_CHANNEL_SWAP=true to flip if your PBX records Right=AGENT.
+    Split stereo audio, transcribe each channel independently, then auto-detect
+    which channel is the AGENT based on:
+      1. Manual override via STEREO_CHANNEL_AGENT=left|right (highest priority)
+      2. Agent-intro phrase matching in transcript ("this is X with Y company")
+      3. Talk-time fallback (agent typically dominates the call)
     """
     from pydub import AudioSegment
 
     audio = AudioSegment.from_file(audio_path)
     channels = audio.split_to_mono()
     duration_seconds = len(audio) / 1000.0
-    segments: list[TranscriptSegment] = []
     language = "en"
 
-    # Default order: [LEFT=AGENT, RIGHT=CUSTOMER]. Flip if swap enabled.
-    swap = os.getenv("STEREO_CHANNEL_SWAP", "false").lower() == "true"
-    speaker_order = ["CUSTOMER", "AGENT"] if swap else ["AGENT", "CUSTOMER"]
-    logger.info("Stereo split: L=%s, R=%s (swap=%s)",
-                speaker_order[0], speaker_order[1], swap)
-
-    for channel_audio, speaker in zip(channels, speaker_order):
-        channel_path = f"{tmpdir}/{speaker.lower()}.wav"
+    # Transcribe each channel separately and collect segments per channel
+    per_channel: list[list[dict]] = [[], []]
+    for idx, channel_audio in enumerate(channels):
+        channel_path = f"{tmpdir}/ch{idx}.wav"
         channel_audio.export(channel_path, format="wav")
         segs_iter, info = model.transcribe(channel_path, **kwargs)
-        if speaker == "AGENT":
+        if idx == 0:
             language = info.language
         for seg in segs_iter:
             if not seg.text.strip():
@@ -183,13 +211,40 @@ def _transcribe_stereo(
                 sum(w.probability for w in seg.words) / len(seg.words)
                 if seg.words else 0.9
             )
-            segments.append(TranscriptSegment(
-                speaker=speaker,
-                start_ms=int(seg.start * 1000),
-                end_ms=int(seg.end * 1000),
-                text=seg.text.strip(),
-                confidence=round(avg_conf, 4),
-            ))
+            per_channel[idx].append({
+                "start_ms": int(seg.start * 1000),
+                "end_ms": int(seg.end * 1000),
+                "text": seg.text.strip(),
+                "confidence": round(avg_conf, 4),
+            })
+
+    # Decide which channel is the AGENT
+    manual = os.getenv("STEREO_CHANNEL_AGENT", "").lower().strip()
+    if manual == "left":
+        agent_idx = 0
+        decision = "manual override (STEREO_CHANNEL_AGENT=left)"
+    elif manual == "right":
+        agent_idx = 1
+        decision = "manual override (STEREO_CHANNEL_AGENT=right)"
+    elif os.getenv("STEREO_CHANNEL_SWAP", "false").lower() == "true":
+        agent_idx = 1
+        decision = "STEREO_CHANNEL_SWAP=true"
+    else:
+        score_left = _score_agent_likelihood(per_channel[0])
+        score_right = _score_agent_likelihood(per_channel[1])
+        agent_idx = 0 if score_left >= score_right else 1
+        decision = f"auto-detected (left_score={score_left:.1f}, right_score={score_right:.1f})"
+
+    customer_idx = 1 - agent_idx
+    logger.info("Stereo agent channel: %s (%s)",
+                "LEFT" if agent_idx == 0 else "RIGHT", decision)
+
+    # Build final segment list with correct AGENT/CUSTOMER labels
+    segments: list[TranscriptSegment] = []
+    for seg in per_channel[agent_idx]:
+        segments.append(TranscriptSegment(speaker="AGENT", **seg))
+    for seg in per_channel[customer_idx]:
+        segments.append(TranscriptSegment(speaker="CUSTOMER", **seg))
 
     segments.sort(key=lambda s: s.start_ms)
     logger.info("Stereo split complete — AGENT segs: %d, CUSTOMER segs: %d",
