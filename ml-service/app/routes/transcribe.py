@@ -116,9 +116,33 @@ def _base_transcribe_kwargs(language: Optional[str]) -> dict:
 # ---------------------------------------------------------------------------
 
 def _is_stereo(audio_path: str) -> bool:
+    """Returns True only if the file is true stereo with distinct channels.
+
+    If both channels are essentially identical (summed audio, common with mis-
+    configured PBXs), returns False so the caller falls back to diarization.
+    """
     try:
         from pydub import AudioSegment
-        return AudioSegment.from_file(audio_path).channels == 2
+        import numpy as np
+
+        audio = AudioSegment.from_file(audio_path)
+        if audio.channels != 2:
+            return False
+
+        # Compare channels — if they're nearly identical the recording is summed
+        samples = np.array(audio.get_array_of_samples()).reshape(-1, 2)
+        left = samples[:, 0].astype(np.float32)
+        right = samples[:, 1].astype(np.float32)
+
+        # Cosine similarity — 1.0 = identical channels (summed audio)
+        denom = (np.linalg.norm(left) * np.linalg.norm(right)) or 1.0
+        similarity = float(np.dot(left, right) / denom)
+        logger.info("Stereo similarity L vs R: %.3f", similarity)
+
+        if similarity > 0.98:
+            logger.warning("Stereo channels nearly identical — treating as mono for diarization")
+            return False
+        return True
     except Exception as exc:
         logger.warning("Stereo check failed: %s", exc)
         return False
@@ -129,8 +153,8 @@ def _transcribe_stereo(
 ) -> tuple[list[TranscriptSegment], str, float]:
     """
     Split stereo audio, transcribe each channel independently.
-    Left channel → AGENT, Right channel → CUSTOMER.
-    Eliminates speaker diarization guesswork entirely.
+    Default: Left channel → AGENT, Right channel → CUSTOMER (3CX standard).
+    Set STEREO_CHANNEL_SWAP=true to flip if your PBX records Right=AGENT.
     """
     from pydub import AudioSegment
 
@@ -140,7 +164,13 @@ def _transcribe_stereo(
     segments: list[TranscriptSegment] = []
     language = "en"
 
-    for channel_audio, speaker in zip(channels, ["AGENT", "CUSTOMER"]):
+    # Default order: [LEFT=AGENT, RIGHT=CUSTOMER]. Flip if swap enabled.
+    swap = os.getenv("STEREO_CHANNEL_SWAP", "false").lower() == "true"
+    speaker_order = ["CUSTOMER", "AGENT"] if swap else ["AGENT", "CUSTOMER"]
+    logger.info("Stereo split: L=%s, R=%s (swap=%s)",
+                speaker_order[0], speaker_order[1], swap)
+
+    for channel_audio, speaker in zip(channels, speaker_order):
         channel_path = f"{tmpdir}/{speaker.lower()}.wav"
         channel_audio.export(channel_path, format="wav")
         segs_iter, info = model.transcribe(channel_path, **kwargs)
@@ -213,12 +243,28 @@ def _get_pyannote_pipeline():
 
 
 def _assign_speakers_pyannote(whisper_segments: list, diarization) -> list[TranscriptSegment]:
+    """Map Pyannote speaker labels to AGENT/CUSTOMER.
+
+    The speaker with the most total talk time is labeled AGENT — in outbound
+    sales calls the agent reliably dominates the conversation.
+    """
     turn_list = list(diarization.itertracks(yield_label=True))
-    unique_speakers: list[str] = []
-    for _, _, spk in turn_list:
-        if spk not in unique_speakers:
-            unique_speakers.append(spk)
-    label_map = {spk: ("AGENT" if i == 0 else "CUSTOMER") for i, spk in enumerate(unique_speakers[:2])}
+
+    # Calculate total talk time per speaker — most talkative = AGENT
+    talk_time: dict[str, float] = {}
+    for turn, _, spk in turn_list:
+        talk_time[spk] = talk_time.get(spk, 0) + (turn.end - turn.start)
+
+    if not talk_time:
+        # No speakers detected — fall through with default AGENT
+        label_map: dict[str, str] = {}
+    else:
+        sorted_speakers = sorted(talk_time.items(), key=lambda x: x[1], reverse=True)
+        label_map = {sorted_speakers[0][0]: "AGENT"}
+        if len(sorted_speakers) > 1:
+            label_map[sorted_speakers[1][0]] = "CUSTOMER"
+        logger.info("Pyannote speaker mapping by talk time: %s", label_map)
+
     result: list[TranscriptSegment] = []
     for seg in whisper_segments:
         best_label = "AGENT"
@@ -227,7 +273,7 @@ def _assign_speakers_pyannote(whisper_segments: list, diarization) -> list[Trans
             overlap = min(turn.end, seg.end) - max(turn.start, seg.start)
             if overlap > best_overlap:
                 best_overlap = overlap
-                best_label = label_map.get(spk, "AGENT")
+                best_label = label_map.get(spk, "CUSTOMER")
         avg_conf = sum(w.probability for w in seg.words) / len(seg.words) if seg.words else 0.9
         result.append(TranscriptSegment(
             speaker=best_label, start_ms=int(seg.start * 1000), end_ms=int(seg.end * 1000),
