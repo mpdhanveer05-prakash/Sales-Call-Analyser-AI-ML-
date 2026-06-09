@@ -60,6 +60,8 @@ def _fetch_data(call_id: str) -> tuple[list[dict], dict]:
         segs = [
             {
                 "speaker": s.speaker,
+                "role": s.role,
+                "role_confidence": float(s.role_confidence) if s.role_confidence else None,
                 "start_ms": s.start_ms,
                 "end_ms": s.end_ms,
                 "text": s.text,
@@ -180,18 +182,46 @@ def sales_score_task(self, call_id: str) -> dict:
         if not segments:
             raise ValueError(f"No transcript segments for call {call_id}")
 
-        # Detect call type from early disposition (set by transcribe_task) or re-detect
+        # Source of truth: call_topology (set by transcribe_task from ML service).
+        # Falls back to existing disposition if topology is missing on old rows.
         with SyncSessionLocal() as db:
             call_row = db.execute(select(Call).where(Call.id == UUID(call_id))).scalar_one_or_none()
+            topology = call_row.call_topology if call_row else None
             early_disposition = call_row.disposition if call_row else None
-        call_type = early_disposition if early_disposition in ("VOICEMAIL", "NO_ANSWER") else "LIVE"
 
-        # Fix 4: Signal-based scores (instant, deterministic, no LLM)
-        if call_type in ("VOICEMAIL", "NO_ANSWER"):
-            logger.info("Call %s is %s — using minimal scoring", call_id, call_type)
-            sales_result = signal_scoring._empty_scores(f"Not applicable — {call_type} call")
+        VOICEMAIL_TOPOLOGIES = {
+            "HUMAN_TO_VOICEMAIL",
+            "HUMAN_VIA_AUTO_ATTENDANT_TO_VOICEMAIL",
+        }
+        if topology in VOICEMAIL_TOPOLOGIES:
+            call_type = "VOICEMAIL"
+        elif topology == "ABANDONED":
+            call_type = "NO_ANSWER"
+        elif early_disposition in ("VOICEMAIL", "NO_ANSWER"):
+            call_type = early_disposition
         else:
-            logger.info("Computing signal-based sales scores for call %s (%d segments)", call_id, len(segments))
+            call_type = "LIVE"
+
+        # Check whether any human dialogue exists — calls with only automation
+        # shouldn't get a sales score
+        human_segments = [
+            s for s in segments
+            if s.get("role") in ("HUMAN_AGENT", "HUMAN_CUSTOMER")
+            or (not s.get("role") and s.get("speaker") in ("AGENT", "CUSTOMER"))
+        ]
+
+        # Signal-based scores (instant, deterministic, no LLM)
+        if call_type in ("VOICEMAIL", "NO_ANSWER") or not human_segments:
+            logger.info("Call %s is %s (topology=%s) — using minimal scoring",
+                        call_id, call_type, topology)
+            sales_result = signal_scoring._empty_scores(
+                f"Not applicable — {call_type} call (topology={topology})"
+            )
+        else:
+            logger.info(
+                "Computing signal-based sales scores for call %s (%d total segs, %d human, topology=%s)",
+                call_id, len(segments), len(human_segments), topology,
+            )
             sales_result = signal_scoring.compute_scores(segments, rubric)
 
         # Fix 2 + 4: LLM handles narrative only (summary, disposition, coaching, sentiment)

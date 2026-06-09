@@ -23,6 +23,27 @@ SALES_WEIGHTS: dict[str, float] = {
     "compliance":         0.05,
 }
 
+# Roles that get scored — automated segments are filtered out entirely.
+HUMAN_ROLES = {"HUMAN_AGENT", "HUMAN_CUSTOMER"}
+AUTOMATED_ROLES = {"AUTO_ATTENDANT", "IVR_SYSTEM", "VOICEMAIL_GREETING", "VOICEMAIL_MENU"}
+
+
+def _filter_human_segments(segments: list[dict]) -> list[dict]:
+    """Drop automated segments and segments with no role info — they shouldn't
+    influence sales scores. If `role` is missing (back-compat), fall back to
+    legacy speaker = AGENT|CUSTOMER (treats SYSTEM as automated)."""
+    out: list[dict] = []
+    for s in segments:
+        role = s.get("role")
+        if role:
+            if role in HUMAN_ROLES:
+                out.append(s)
+            continue
+        speaker = s.get("speaker", "").upper()
+        if speaker in ("AGENT", "CUSTOMER"):
+            out.append(s)
+    return out
+
 _GREETING_KW = [
     "hello", "hi", "good morning", "good afternoon", "good evening",
     "my name is", "i'm calling from", "calling from", "this is", "speaking",
@@ -42,9 +63,24 @@ def compute_scores(segments: list[dict], rubric: dict | None = None) -> dict:
     """
     Returns {"scores": ..., "dimension_scores": ..., "composite": float}
     matching the exact schema previously produced by the LLM scorer.
+
+    Filters out automated segments (AUTO_ATTENDANT, IVR, VOICEMAIL_GREETING,
+    VOICEMAIL_MENU) before scoring — only HUMAN_AGENT and HUMAN_CUSTOMER
+    segments contribute to dimension scores.
     """
-    agent_segs = [s for s in segments if s.get("speaker") == "AGENT"]
-    customer_segs = [s for s in segments if s.get("speaker") == "CUSTOMER"]
+    # Filter out AUTOMATED segments — they're not part of the sales conversation
+    segments = _filter_human_segments(segments)
+    if not segments:
+        return _empty_scores("No human dialogue detected — call was entirely automated")
+
+    agent_segs = [
+        s for s in segments
+        if s.get("role") == "HUMAN_AGENT" or (not s.get("role") and s.get("speaker") == "AGENT")
+    ]
+    customer_segs = [
+        s for s in segments
+        if s.get("role") == "HUMAN_CUSTOMER" or (not s.get("role") and s.get("speaker") == "CUSTOMER")
+    ]
 
     if not agent_segs:
         return _empty_scores("No agent speech detected in transcript")

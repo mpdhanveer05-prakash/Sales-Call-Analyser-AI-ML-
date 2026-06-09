@@ -24,6 +24,8 @@ class CallOut(BaseModel):
     duration_seconds: Optional[int]
     status: CallStatus
     disposition: Optional[str]
+    call_topology: Optional[str] = None
+    call_topology_confidence: Optional[float] = None
     speech_score: Optional[float]
     sales_score: Optional[float]
     original_filename: str

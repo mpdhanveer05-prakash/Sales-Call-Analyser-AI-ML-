@@ -3,7 +3,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional, TYPE_CHECKING
 
-from sqlalchemy import String, Text, Integer, Date, DateTime, ForeignKey, Numeric, func
+from sqlalchemy import String, Text, Integer, Date, DateTime, Float, ForeignKey, Numeric, func
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
@@ -42,6 +42,8 @@ class Call(Base):
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     call_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     disposition: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    call_topology: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    call_topology_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     speech_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
     sales_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

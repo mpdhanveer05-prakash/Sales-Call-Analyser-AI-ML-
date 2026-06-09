@@ -7,7 +7,9 @@ from pydantic import BaseModel
 
 class TranscriptSegmentOut(BaseModel):
     id: uuid.UUID
-    speaker: str
+    speaker: str                       # Back-compat: AGENT / CUSTOMER / SYSTEM
+    role: str = "UNKNOWN"              # Semantic: HUMAN_AGENT, AUTO_ATTENDANT, etc.
+    role_confidence: Optional[float] = None
     start_ms: int
     end_ms: int
     text: str

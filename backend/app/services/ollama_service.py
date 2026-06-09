@@ -46,7 +46,28 @@ SALES_WEIGHTS: dict[str, float] = {
 # Transcript formatters
 # ---------------------------------------------------------------------------
 
+AUTOMATED_ROLES = {"AUTO_ATTENDANT", "IVR_SYSTEM", "VOICEMAIL_GREETING", "VOICEMAIL_MENU"}
+
+
+def _filter_human_only(segments: list[dict]) -> list[dict]:
+    """Keep only segments where a human is speaking.  Falls back to legacy
+    speaker=AGENT/CUSTOMER when role is missing (old data, pre-migration 018)."""
+    out: list[dict] = []
+    for s in segments:
+        role = s.get("role")
+        if role:
+            if role in ("HUMAN_AGENT", "HUMAN_CUSTOMER"):
+                out.append(s)
+            continue
+        if s.get("speaker", "").upper() in ("AGENT", "CUSTOMER"):
+            out.append(s)
+    return out
+
+
 def format_transcript(segments: list[dict], max_words: int = 2000) -> str:
+    """Format transcript for LLM analysis.  Automated segments are dropped —
+    LLM only sees the human conversation, not auto-attendant / voicemail noise."""
+    segments = _filter_human_only(segments)
     lines: list[str] = []
     word_count = 0
     for seg in segments:
@@ -54,15 +75,23 @@ def format_transcript(segments: list[dict], max_words: int = 2000) -> str:
         m, s = divmod(start_sec, 60)
         text = seg["text"].strip()
         words = text.split()
+        # Prefer human-friendly role label if available
+        role = seg.get("role") or seg.get("speaker", "?")
+        display = "AGENT" if role == "HUMAN_AGENT" else (
+            "CUSTOMER" if role == "HUMAN_CUSTOMER" else seg.get("speaker", "?")
+        )
         if word_count + len(words) > max_words:
-            lines.append(f"[{m:02d}:{s:02d} {seg['speaker']}] [...transcript truncated...]")
+            lines.append(f"[{m:02d}:{s:02d} {display}] [...transcript truncated...]")
             break
-        lines.append(f"[{m:02d}:{s:02d} {seg['speaker']}] {text}")
+        lines.append(f"[{m:02d}:{s:02d} {display}] {text}")
         word_count += len(words)
     return "\n".join(lines)
 
 
 def _format_transcript_with_timestamps(segments: list[dict], max_words: int = 2000) -> str:
+    """Same as format_transcript but with a slightly different layout used by
+    coaching/objection/sentiment prompts.  Also filters automated segments."""
+    segments = _filter_human_only(segments)
     lines: list[str] = []
     word_count = 0
     for seg in segments:
@@ -70,10 +99,14 @@ def _format_transcript_with_timestamps(segments: list[dict], max_words: int = 20
         m, s = divmod(start_sec, 60)
         text = seg["text"].strip()
         words = text.split()
+        role = seg.get("role") or seg.get("speaker", "?")
+        display = "AGENT" if role == "HUMAN_AGENT" else (
+            "CUSTOMER" if role == "HUMAN_CUSTOMER" else seg.get("speaker", "?")
+        )
         if word_count + len(words) > max_words:
-            lines.append(f"{seg['speaker']} [{m}:{s:02d}]: [...truncated...]")
+            lines.append(f"{display} [{m}:{s:02d}]: [...truncated...]")
             break
-        lines.append(f"{seg['speaker']} [{m}:{s:02d}]: {text}")
+        lines.append(f"{display} [{m}:{s:02d}]: {text}")
         word_count += len(words)
     return "\n".join(lines)
 

@@ -63,6 +63,8 @@ def _save_transcript(
             db.add(TranscriptSegment(
                 transcript_id=transcript.id,
                 speaker=seg["speaker"],
+                role=seg.get("role", "UNKNOWN"),
+                role_confidence=seg.get("role_confidence"),
                 start_ms=seg["start_ms"],
                 end_ms=seg["end_ms"],
                 text=seg["text"],
@@ -106,8 +108,18 @@ def transcribe_call_task(self, call_id: str) -> dict:
         language = result["language"]
         duration_seconds = result["duration_seconds"]
         call_type = result.get("call_type", "LIVE")
+        call_topology = result.get("call_topology", "UNKNOWN")
+        topology_confidence = result.get("topology_confidence", 0.0)
 
         _save_transcript(call_id, language, duration_seconds, segments)
+
+        # Persist call_topology + topology_confidence on the call row
+        with SyncSessionLocal() as db:
+            call_row = db.execute(select(Call).where(Call.id == UUID(call_id))).scalar_one_or_none()
+            if call_row:
+                call_row.call_topology = call_topology
+                call_row.call_topology_confidence = topology_confidence
+                db.commit()
 
         # Early disposition for non-live calls (Fix 2)
         if call_type in ("VOICEMAIL", "NO_ANSWER"):

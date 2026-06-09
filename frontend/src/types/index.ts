@@ -53,9 +53,29 @@ export interface ApiError {
   code: string;
 }
 
+export type SpeakerRole =
+  | "HUMAN_AGENT"
+  | "HUMAN_CUSTOMER"
+  | "AUTO_ATTENDANT"
+  | "IVR_SYSTEM"
+  | "VOICEMAIL_GREETING"
+  | "VOICEMAIL_MENU"
+  | "UNKNOWN";
+
+export type CallTopology =
+  | "HUMAN_TO_HUMAN"
+  | "HUMAN_TO_VOICEMAIL"
+  | "HUMAN_VIA_AUTO_ATTENDANT_TO_HUMAN"
+  | "HUMAN_VIA_AUTO_ATTENDANT_TO_VOICEMAIL"
+  | "HUMAN_VIA_IVR_TO_HUMAN"
+  | "ABANDONED"
+  | "UNKNOWN";
+
 export interface TranscriptSegment {
   id: string;
-  speaker: "AGENT" | "CUSTOMER";
+  speaker: "AGENT" | "CUSTOMER" | "SYSTEM";
+  role?: SpeakerRole;
+  role_confidence?: number | null;
   start_ms: number;
   end_ms: number;
   text: string;

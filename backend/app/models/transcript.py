@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
-from sqlalchemy import String, Text, Integer, DateTime, ForeignKey, Numeric, func
+from sqlalchemy import String, Text, Integer, DateTime, Float, ForeignKey, Numeric, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -38,6 +38,8 @@ class TranscriptSegment(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     transcript_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("transcripts.id", ondelete="CASCADE"), nullable=False, index=True)
     speaker: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, server_default="UNKNOWN", index=True)
+    role_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     start_ms: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     end_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)

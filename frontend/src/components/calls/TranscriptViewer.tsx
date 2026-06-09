@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState } from "react";
 import { Search } from "lucide-react";
 import { clsx } from "clsx";
-import type { TranscriptSegment } from "@/types";
+import type { TranscriptSegment, SpeakerRole } from "@/types";
 
 interface Props {
   segments: TranscriptSegment[];
@@ -16,8 +16,71 @@ function formatTimestamp(ms: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// ─── Role display config ────────────────────────────────────────────────────
+const ROLE_STYLES: Record<
+  SpeakerRole,
+  { label: string; dot: string; text: string; chip: string; italic?: boolean }
+> = {
+  HUMAN_AGENT: {
+    label: "AGENT",
+    dot: "bg-blue-500",
+    text: "text-blue-600",
+    chip: "bg-blue-50 border-blue-200",
+  },
+  HUMAN_CUSTOMER: {
+    label: "CUSTOMER",
+    dot: "bg-emerald-500",
+    text: "text-emerald-600",
+    chip: "bg-emerald-50 border-emerald-200",
+  },
+  AUTO_ATTENDANT: {
+    label: "AUTO-ATTENDANT",
+    dot: "bg-slate-400",
+    text: "text-slate-500",
+    chip: "bg-slate-50 border-slate-200",
+    italic: true,
+  },
+  IVR_SYSTEM: {
+    label: "IVR",
+    dot: "bg-slate-400",
+    text: "text-slate-500",
+    chip: "bg-slate-50 border-slate-200",
+    italic: true,
+  },
+  VOICEMAIL_GREETING: {
+    label: "VOICEMAIL",
+    dot: "bg-slate-400",
+    text: "text-slate-500",
+    chip: "bg-slate-50 border-slate-200",
+    italic: true,
+  },
+  VOICEMAIL_MENU: {
+    label: "VM MENU",
+    dot: "bg-slate-400",
+    text: "text-slate-500",
+    chip: "bg-slate-50 border-slate-200",
+    italic: true,
+  },
+  UNKNOWN: {
+    label: "UNKNOWN",
+    dot: "bg-rose-400",
+    text: "text-rose-600",
+    chip: "bg-rose-50 border-rose-200",
+  },
+};
+
+function getRole(seg: TranscriptSegment): SpeakerRole {
+  if (seg.role) return seg.role;
+  // Back-compat for old data without role: map speaker
+  if (seg.speaker === "AGENT") return "HUMAN_AGENT";
+  if (seg.speaker === "CUSTOMER") return "HUMAN_CUSTOMER";
+  if (seg.speaker === "SYSTEM") return "AUTO_ATTENDANT";
+  return "UNKNOWN";
+}
+
 export default function TranscriptViewer({ segments, currentTimeMs, onSeek }: Props) {
   const [query, setQuery] = useState("");
+  const [showAutomated, setShowAutomated] = useState(true);
   const activeRef = useRef<HTMLDivElement>(null);
 
   let activeIdx = -1;
@@ -28,20 +91,31 @@ export default function TranscriptViewer({ segments, currentTimeMs, onSeek }: Pr
     }
   }
 
-  // Auto-scroll to active segment
   useEffect(() => {
     if (activeRef.current) {
       activeRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
   }, [activeIdx]);
 
-  const filtered = query.trim()
-    ? segments.filter((s) => s.text.toLowerCase().includes(query.toLowerCase()))
-    : segments;
+  let displayed = segments;
+  if (!showAutomated) {
+    displayed = displayed.filter((s) => {
+      const r = getRole(s);
+      return r === "HUMAN_AGENT" || r === "HUMAN_CUSTOMER";
+    });
+  }
+  if (query.trim()) {
+    displayed = displayed.filter((s) =>
+      s.text.toLowerCase().includes(query.toLowerCase())
+    );
+  }
 
   const highlight = (text: string) => {
     if (!query.trim()) return text;
-    const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+    const regex = new RegExp(
+      `(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
+      "gi"
+    );
     const parts = text.split(regex);
     return parts.map((part, i) =>
       regex.test(part) ? (
@@ -53,6 +127,11 @@ export default function TranscriptViewer({ segments, currentTimeMs, onSeek }: Pr
       )
     );
   };
+
+  const hasAutomated = segments.some((s) => {
+    const r = getRole(s);
+    return r !== "HUMAN_AGENT" && r !== "HUMAN_CUSTOMER" && r !== "UNKNOWN";
+  });
 
   return (
     <div className="flex flex-col h-full">
@@ -68,29 +147,50 @@ export default function TranscriptViewer({ segments, currentTimeMs, onSeek }: Pr
         />
         {query && (
           <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">
-            {filtered.length} result{filtered.length !== 1 ? "s" : ""}
+            {displayed.length} result{displayed.length !== 1 ? "s" : ""}
           </span>
         )}
       </div>
 
-      {/* Speaker legend */}
-      <div className="flex gap-4 mb-3 text-xs text-gray-500">
-        <span className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-blue-500 inline-block" /> AGENT
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> CUSTOMER
-        </span>
+      {/* Legend + filter toggle */}
+      <div className="flex items-center justify-between mb-3 text-xs text-gray-500">
+        <div className="flex gap-3 flex-wrap">
+          <span className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-blue-500 inline-block" /> Agent
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Customer
+          </span>
+          {hasAutomated && (
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-slate-400 inline-block" /> Automated
+            </span>
+          )}
+        </div>
+        {hasAutomated && (
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showAutomated}
+              onChange={(e) => setShowAutomated(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            Show automated
+          </label>
+        )}
       </div>
 
       {/* Segments */}
       <div className="flex-1 overflow-y-auto space-y-1 pr-1">
-        {filtered.length === 0 ? (
+        {displayed.length === 0 ? (
           <p className="text-sm text-gray-400 text-center py-8">No matching segments.</p>
         ) : (
-          filtered.map((seg, idx) => {
-            const isActive = !query && idx === activeIdx;
-            const isAgent = seg.speaker === "AGENT";
+          displayed.map((seg, idx) => {
+            const role = getRole(seg);
+            const style = ROLE_STYLES[role];
+            const isActive = !query && segments.indexOf(seg) === activeIdx;
+            const lowConfidence =
+              seg.role_confidence != null && seg.role_confidence < 0.7;
 
             return (
               <div
@@ -101,7 +201,7 @@ export default function TranscriptViewer({ segments, currentTimeMs, onSeek }: Pr
                   "group flex gap-3 rounded-lg px-3 py-2 cursor-pointer transition-colors",
                   isActive
                     ? "bg-blue-50 border border-blue-200"
-                    : "hover:bg-gray-50 border border-transparent"
+                    : `hover:${style.chip} border border-transparent`
                 )}
               >
                 {/* Timestamp */}
@@ -109,25 +209,32 @@ export default function TranscriptViewer({ segments, currentTimeMs, onSeek }: Pr
                   {formatTimestamp(seg.start_ms)}
                 </span>
 
-                {/* Speaker dot */}
+                {/* Role dot */}
                 <span
-                  className={clsx(
-                    "shrink-0 w-2 h-2 rounded-full mt-1.5",
-                    isAgent ? "bg-blue-500" : "bg-emerald-500"
-                  )}
+                  className={clsx("shrink-0 w-2 h-2 rounded-full mt-1.5", style.dot)}
                 />
 
-                {/* Speaker label + text */}
+                {/* Role label + text */}
                 <div className="flex-1 min-w-0">
                   <span
                     className={clsx(
                       "text-[10px] font-semibold uppercase tracking-wider mr-1",
-                      isAgent ? "text-blue-600" : "text-emerald-600"
+                      style.text
                     )}
                   >
-                    {seg.speaker}
+                    {style.label}
                   </span>
-                  <span className="text-sm text-gray-800 leading-relaxed">
+                  {lowConfidence && (
+                    <span className="text-[9px] text-rose-500 mr-1" title="Low role confidence">
+                      ⚠
+                    </span>
+                  )}
+                  <span
+                    className={clsx(
+                      "text-sm leading-relaxed",
+                      style.italic ? "text-gray-500 italic" : "text-gray-800"
+                    )}
+                  >
                     {highlight(seg.text)}
                   </span>
                 </div>

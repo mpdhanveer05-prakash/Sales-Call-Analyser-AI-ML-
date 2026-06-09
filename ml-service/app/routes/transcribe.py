@@ -48,7 +48,9 @@ class TranscribeRequest(BaseModel):
 
 
 class TranscriptSegment(BaseModel):
-    speaker: str
+    speaker: str                          # Back-compat: AGENT/CUSTOMER/SYSTEM
+    role: str = "UNKNOWN"                 # Semantic role: HUMAN_AGENT, AUTO_ATTENDANT, etc.
+    role_confidence: float = 0.0
     start_ms: int
     end_ms: int
     text: str
@@ -59,7 +61,9 @@ class TranscribeResponse(BaseModel):
     segments: list[TranscriptSegment]
     language: str
     duration_seconds: float
-    call_type: str = "LIVE"   # LIVE | VOICEMAIL | NO_ANSWER
+    call_type: str = "LIVE"                # LIVE | VOICEMAIL | NO_ANSWER (back-compat)
+    call_topology: str = "UNKNOWN"         # Semantic topology of the call
+    topology_confidence: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -506,35 +510,75 @@ async def transcribe_audio(request: TranscribeRequest) -> TranscribeResponse:
         # Optional WhisperX wav2vec2 alignment for more precise word timestamps
         segments = _align_segments_whisperx(segments, audio_path)
 
-        call_type = _detect_call_type(segments, duration_seconds)
-        logger.info("Transcription done: %.1fs, lang=%s, %d segs, call_type=%s",
-                    duration_seconds, language, len(segments), call_type)
+        # ---------- Semantic role classification (Phase 1) ----------
+        # Replaces channel-based AGENT/CUSTOMER labelling with per-segment role:
+        #   HUMAN_AGENT, HUMAN_CUSTOMER, AUTO_ATTENDANT, IVR_SYSTEM,
+        #   VOICEMAIL_GREETING, VOICEMAIL_MENU, UNKNOWN
+        from app.services import speaker_role_classifier as src
 
-        # For voicemail calls: relabel CUSTOMER segments before first AGENT speech as SYSTEM
-        # These are the ISP automated prompts ("Your call has been forwarded to voicemail...")
-        # not the actual customer speaking.
-        if call_type == "VOICEMAIL":
-            first_agent_ms = next(
-                (s.start_ms for s in segments if s.speaker == "AGENT"), None
+        classifier_input = [
+            {
+                "text": s.text,
+                "start_ms": s.start_ms,
+                "end_ms": s.end_ms,
+                "channel": 0 if s.speaker == "AGENT" else 1,
+            }
+            for s in segments
+        ]
+        cls_result = src.classify_segments(classifier_input)
+
+        # Attach role + role_confidence to segments. Also keep a derived `speaker`
+        # column for back-compat with code that still reads AGENT/CUSTOMER.
+        segments = [
+            TranscriptSegment(
+                speaker=_role_to_speaker(c.role, orig.speaker),
+                role=c.role,
+                role_confidence=c.confidence,
+                start_ms=orig.start_ms,
+                end_ms=orig.end_ms,
+                text=orig.text,
+                confidence=orig.confidence,
             )
-            segments = [
-                TranscriptSegment(
-                    speaker="SYSTEM" if (
-                        s.speaker == "CUSTOMER"
-                        and (first_agent_ms is None or s.start_ms < first_agent_ms)
-                    ) else s.speaker,
-                    start_ms=s.start_ms,
-                    end_ms=s.end_ms,
-                    text=s.text,
-                    confidence=s.confidence,
-                )
-                for s in segments
-            ]
-            logger.info("Voicemail: relabelled ISP prompts as SYSTEM speaker")
+            for orig, c in zip(segments, cls_result.segments)
+        ]
+
+        # Derive call_type from topology for back-compat with downstream code that
+        # still reads call_type. Topology is the source of truth going forward.
+        call_topology = cls_result.call_topology
+        topology_conf = cls_result.topology_confidence
+        topology_dispo = src.topology_to_disposition(call_topology)
+        if topology_dispo == "VOICEMAIL":
+            call_type = "VOICEMAIL"
+        elif topology_dispo == "NO_ANSWER":
+            call_type = "NO_ANSWER"
+        else:
+            call_type = _detect_call_type(segments, duration_seconds)
+
+        logger.info(
+            "Transcription done: %.1fs, lang=%s, %d segs, call_type=%s, topology=%s (%.2f)",
+            duration_seconds, language, len(segments), call_type, call_topology, topology_conf,
+        )
 
         return TranscribeResponse(
             segments=segments,
             language=language,
             duration_seconds=round(duration_seconds, 2),
             call_type=call_type,
+            call_topology=call_topology,
+            topology_confidence=topology_conf,
         )
+
+
+def _role_to_speaker(role: str, fallback_speaker: str) -> str:
+    """Map semantic role back to legacy speaker label for back-compat.
+
+    Frontend should read `role` directly; this is only for downstream code that
+    has not been updated yet.
+    """
+    if role == "HUMAN_AGENT":
+        return "AGENT"
+    if role == "HUMAN_CUSTOMER":
+        return "CUSTOMER"
+    if role in ("AUTO_ATTENDANT", "IVR_SYSTEM", "VOICEMAIL_GREETING", "VOICEMAIL_MENU"):
+        return "SYSTEM"
+    return fallback_speaker
