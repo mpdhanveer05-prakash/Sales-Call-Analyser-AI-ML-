@@ -267,7 +267,8 @@ def _llm_classify(
 
     ollama_url = os.getenv("OLLAMA_URL", "http://ollama:11434")
     model = os.getenv("SPEAKER_ROLE_MODEL", os.getenv("OLLAMA_DEFAULT_MODEL", "qwen2.5:14b-instruct"))
-    timeout = float(os.getenv("SPEAKER_ROLE_TIMEOUT", "180"))
+    # Long default — first call after restart needs ~60s for model to load into VRAM
+    timeout = float(os.getenv("SPEAKER_ROLE_TIMEOUT", "600"))
 
     try:
         with httpx.Client(timeout=timeout) as client:
@@ -358,6 +359,36 @@ def _derive_topology(classifications: list[SegmentClassification]) -> tuple[str,
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _channel_fallback(
+    segments: list[dict], rule_results: list[SegmentClassification]
+) -> None:
+    """When the LLM is unavailable and a segment has no rule match, assign role
+    from channel hints: agent channel → HUMAN_AGENT, customer channel → HUMAN_CUSTOMER.
+    This is a last-resort fallback; mutates rule_results in place."""
+    # Determine which channel is most likely AGENT — channel with majority of
+    # HUMAN_AGENT or AUTO_ATTENDANT rule matches (agent intros tend to occur on
+    # one channel; auto-attendants on the other in outbound calls).
+    ch_agent_score = {0: 0, 1: 0}
+    for i, seg in enumerate(segments):
+        ch = seg.get("channel", 0)
+        if rule_results[i].role == ROLE_HUMAN_AGENT:
+            ch_agent_score[ch] += 1
+    agent_ch = max(ch_agent_score, key=ch_agent_score.get)
+
+    for i, seg in enumerate(segments):
+        if rule_results[i].role != ROLE_UNKNOWN:
+            continue
+        ch = seg.get("channel", 0)
+        if ch == agent_ch:
+            rule_results[i].role = ROLE_HUMAN_AGENT
+            rule_results[i].confidence = 0.55
+            rule_results[i].reason = "channel fallback (no LLM, no rule match)"
+        else:
+            rule_results[i].role = ROLE_HUMAN_CUSTOMER
+            rule_results[i].confidence = 0.55
+            rule_results[i].reason = "channel fallback (no LLM, no rule match)"
+
+
 def classify_segments(segments: list[dict]) -> ClassificationResult:
     """
     Classify each transcript segment with a semantic role.
@@ -397,6 +428,11 @@ def classify_segments(segments: list[dict]) -> ClassificationResult:
     if use_llm:
         # Stage B: LLM refinement
         llm_raw = _llm_classify(segments, rule_results)
+        # If LLM didn't return useful results (timeout, parse fail, empty),
+        # apply channel-based fallback so we don't ship UNKNOWN labels downstream.
+        if not llm_raw.get("segments"):
+            logger.info("LLM unavailable — applying channel-based fallback for UNKNOWN segments")
+            _channel_fallback(segments, rule_results)
         llm_by_idx: dict[int, dict] = {}
         for s in llm_raw.get("segments", []) or []:
             try:

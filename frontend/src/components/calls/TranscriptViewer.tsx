@@ -185,7 +185,7 @@ export default function TranscriptViewer({ segments, currentTimeMs, onSeek }: Pr
         {displayed.length === 0 ? (
           <p className="text-sm text-gray-400 text-center py-8">No matching segments.</p>
         ) : (
-          displayed.map((seg, idx) => {
+          displayed.map((seg) => {
             const role = getRole(seg);
             const style = ROLE_STYLES[role];
             const isActive = !query && segments.indexOf(seg) === activeIdx;
