@@ -60,55 +60,65 @@ TOPOLOGY_UNKNOWN = "UNKNOWN"
 # Stage A: rule patterns
 # ---------------------------------------------------------------------------
 
-_RULES: dict[str, list[re.Pattern]] = {
-    ROLE_AUTO_ATTENDANT: [
-        re.compile(r"\bpress\s+(?:one|two|three|four|five|six|seven|eight|nine|zero|pound|star|\d)\b", re.I),
-        re.compile(r"\bthank\s+you\s+for\s+calling\b", re.I),
-        re.compile(r"\bdirectory\s+search\b", re.I),
-        re.compile(r"\byour\s+call\s+may\s+be\s+recorded\b", re.I),
-        re.compile(r"\btransferring\s+your\s+call\b", re.I),
-        re.compile(r"\bplease\s+listen\s+carefully\b", re.I),
-        re.compile(r"\bmain\s+menu\b", re.I),
-        re.compile(r"\bif\s+you\s+know\s+your\s+party'?s?\s+extension\b", re.I),
-        re.compile(r"\bfor\s+(?:sales|support|billing|customer\s+service)\b.*\bpress\b", re.I),
-    ],
-    ROLE_VM_GREETING: [
-        re.compile(r"\bperson\s+you(?:\s+are|'re)\s+trying\s+to\s+reach\b", re.I),
-        re.compile(r"\bcurrently\s+(?:unavailable|not\s+available)\b", re.I),
-        re.compile(r"\bleave\s+a\s+(?:detailed\s+)?message\b", re.I),
-        re.compile(r"\bafter\s+(?:the\s+)?(?:tone|beep)\b", re.I),
-        re.compile(r"\bat\s+the\s+(?:tone|beep)\b", re.I),
-        re.compile(r"\bvoice\s*mail\b", re.I),
-        re.compile(r"\brecord\s+your\s+message\b", re.I),
-        re.compile(r"\bwhen\s+you\s+have\s+finished\s+recording\b", re.I),
-        re.compile(r"\b(?:has\s+been\s+)?forwarded\s+to\s+voicemail\b", re.I),
-    ],
-    ROLE_VM_MENU: [
-        re.compile(r"\bto\s+replay\b.*\bpress\b", re.I),
-        re.compile(r"\bto\s+send\b.*\bpress\b", re.I),
-        re.compile(r"\bto\s+(?:re-?\s*record|erase|delete)\b.*\bpress\b", re.I),
-        re.compile(r"\bmessage\s+(?:sent|saved|deleted|erased)\b", re.I),
-        re.compile(r"\bsent\s+with\s+high\s+importance\b", re.I),
-        re.compile(r"\bto\s+continue\s+holding\b", re.I),
-    ],
-    ROLE_IVR: [
-        re.compile(r"\bplease\s+say\b", re.I),
-        re.compile(r"\bdid\s+you\s+say\b", re.I),
-        re.compile(r"\bi\s+didn'?t\s+understand\b", re.I),
-        re.compile(r"\bsay\s+(?:yes|no|main\s+menu)\b", re.I),
-        re.compile(r"\bgo\s+ahead\b.*\bspeak\b", re.I),
-        re.compile(r"\benter\s+your\s+account\s+number\b", re.I),
-    ],
-    # Strong human-agent self-introduction phrases (sales agents commonly say these)
-    ROLE_HUMAN_AGENT: [
-        re.compile(r"\bthis\s+is\s+\w+\b.*\b(?:calling|from|with)\b", re.I),
-        re.compile(r"\bcalling\s+from\s+\w+", re.I),
-        re.compile(r"\bcalling\s+regarding\b", re.I),
-        re.compile(r"\bcalling\s+about\b", re.I),
-        re.compile(r"\bi'?m\s+calling\s+(?:from|regarding|about)\b", re.I),
-        re.compile(r"\bmy\s+name\s+is\s+\w+", re.I),
-    ],
-}
+# Weighted rule list: (role, pattern, weight).
+# Higher weight wins on ties. Specific phrases score 5-6; generic ones 2-3.
+_RULES_WEIGHTED: list[tuple[str, re.Pattern, int]] = [
+    # ── Voicemail menu (after voicemail recorded — menu options) ──
+    (ROLE_VM_MENU, re.compile(r"\bto\s+replay\b.*\bpress\b", re.I), 6),
+    (ROLE_VM_MENU, re.compile(r"\bto\s+send\b.*\bpress\b", re.I), 6),
+    (ROLE_VM_MENU, re.compile(r"\bto\s+(?:accept|skip|forward|reply|continue|delete|save|re-?\s*record|erase|mark|return)\b.*\bpress\b", re.I), 5),
+    (ROLE_VM_MENU, re.compile(r"\bmessage\s+(?:sent|saved|deleted|erased)\b", re.I), 6),
+    (ROLE_VM_MENU, re.compile(r"\bsent\s+with\s+high\s+importance\b", re.I), 6),
+    (ROLE_VM_MENU, re.compile(r"\b(?:mark|set)\s+as\s+(?:high|normal|low)\s+importance\b", re.I), 5),
+    (ROLE_VM_MENU, re.compile(r"\bmessage\s+options\b", re.I), 4),
+    (ROLE_VM_MENU, re.compile(r"\bto\s+continue\s+holding\b", re.I), 5),
+
+    # ── Voicemail greeting (the answering machine speaking) ──
+    (ROLE_VM_GREETING, re.compile(r"\bperson\s+you(?:\s+are|'re)\s+trying\s+to\s+reach\b", re.I), 6),
+    (ROLE_VM_GREETING, re.compile(r"\bcurrently\s+(?:unavailable|not\s+available)\b", re.I), 6),
+    (ROLE_VM_GREETING, re.compile(r"\bafter\s+(?:the\s+)?(?:tone|beep)\b", re.I), 6),
+    (ROLE_VM_GREETING, re.compile(r"\bat\s+the\s+(?:tone|beep)\b", re.I), 6),
+    (ROLE_VM_GREETING, re.compile(r"\b(?:has\s+been\s+)?forwarded\s+to\s+voicemail\b", re.I), 6),
+    (ROLE_VM_GREETING, re.compile(r"\brecord\s+your\s+message\b", re.I), 5),
+    (ROLE_VM_GREETING, re.compile(r"\bwhen\s+you(?:'re|\s+are|\s+have)\s+(?:finished|done)\b", re.I), 5),
+    (ROLE_VM_GREETING, re.compile(r"\bplease\s+leave\s+(?:a\s+)?(?:detailed\s+)?message\b", re.I), 5),
+    (ROLE_VM_GREETING, re.compile(r"\bleave\s+a\s+(?:detailed\s+)?message\s+after\b", re.I), 6),
+    (ROLE_VM_GREETING, re.compile(r"\bcannot\s+take\s+your\s+call\b", re.I), 6),
+
+    # ── Auto-attendant (company directory / IVR-style menu before reaching anyone) ──
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\bthank\s+you\s+for\s+calling\b", re.I), 6),
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\bdirectory\s+search\b", re.I), 6),
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\bif\s+you\s+know\s+your\s+party'?s?\s+extension\b", re.I), 6),
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\btransferring\s+your\s+call\b", re.I), 6),
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\byour\s+call\s+may\s+be\s+recorded\b", re.I), 6),
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\bplease\s+listen\s+carefully\b", re.I), 5),
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\bmain\s+menu\b", re.I), 5),
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\bfor\s+(?:sales|support|billing|customer\s+service)\b.*\bpress\b", re.I), 6),
+    # "press X to do Y" = auto-attendant menu option (e.g. "press 1 to leave a message")
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\bpress\s+(?:one|two|three|four|five|six|seven|eight|nine|zero|pound|star|\d|\#)\s+to\s+\w+", re.I), 5),
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\bdial\s+by\s+name\b", re.I), 5),
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\b(?:hash|pound|star)\s+key\b", re.I), 3),
+    # Bare "press X" without context — could be either AA or VM_MENU. Low weight.
+    (ROLE_AUTO_ATTENDANT, re.compile(r"\bpress\s+(?:one|two|three|four|five|six|seven|eight|nine|zero|pound|star|\d)\b", re.I), 2),
+
+    # ── IVR / voice-recognition ──
+    (ROLE_IVR, re.compile(r"\bplease\s+say\b", re.I), 6),
+    (ROLE_IVR, re.compile(r"\bdid\s+you\s+say\b", re.I), 6),
+    (ROLE_IVR, re.compile(r"\bi\s+didn'?t\s+understand\b", re.I), 6),
+    (ROLE_IVR, re.compile(r"\bsay\s+(?:yes|no|main\s+menu)\b", re.I), 5),
+    (ROLE_IVR, re.compile(r"\bgo\s+ahead\b.*\bspeak\b", re.I), 5),
+    (ROLE_IVR, re.compile(r"\benter\s+your\s+account\s+number\b", re.I), 6),
+
+    # ── Human agent self-intro (rare on customer side — distinguishes inbound vs outbound) ──
+    (ROLE_HUMAN_AGENT, re.compile(r"\bthis\s+is\s+\w+\b.*\b(?:calling|from|with)\b", re.I), 7),
+    (ROLE_HUMAN_AGENT, re.compile(r"\bcalling\s+from\s+\w+", re.I), 7),
+    (ROLE_HUMAN_AGENT, re.compile(r"\bcalling\s+regarding\b", re.I), 7),
+    (ROLE_HUMAN_AGENT, re.compile(r"\bcalling\s+about\b", re.I), 6),
+    (ROLE_HUMAN_AGENT, re.compile(r"\bi'?m\s+calling\s+(?:from|regarding|about)\b", re.I), 7),
+    (ROLE_HUMAN_AGENT, re.compile(r"\bmy\s+name\s+is\s+\w+", re.I), 6),
+    (ROLE_HUMAN_AGENT, re.compile(r"\byou\s+can\s+reach\s+me\s+at\b", re.I), 6),
+    (ROLE_HUMAN_AGENT, re.compile(r"\bplease\s+(?:call|give)\s+me\s+back\b", re.I), 5),
+]
 
 # Phrases that look automated-ish but are spoken by humans leaving messages
 # These should NOT escalate to VM_GREETING/MENU when the surrounding context is human.
@@ -150,30 +160,45 @@ class ClassificationResult:
 # ---------------------------------------------------------------------------
 
 def _rule_score_one(text: str) -> tuple[str | None, float, str]:
-    """Score a single segment against rule patterns. Returns (role, confidence, reason)."""
+    """Weighted-rule scoring. Each matching pattern adds its weight to the role's
+    score; highest score wins. Confidence reflects raw score magnitude:
+       score >= 10 → 0.96 (multiple specific matches)
+       score >=  5 → 0.82 (one specific match)
+       score >=  2 → 0.65 (only a generic match)
+       else        → unknown
+    """
     if not text or not text.strip():
         return None, 0.0, ""
 
+    role_scores: dict[str, int] = {}
     role_hits: dict[str, int] = {}
-    for role, patterns in _RULES.items():
-        for p in patterns:
-            if p.search(text):
-                role_hits[role] = role_hits.get(role, 0) + 1
+    for role, pattern, weight in _RULES_WEIGHTED:
+        if pattern.search(text):
+            role_scores[role] = role_scores.get(role, 0) + weight
+            role_hits[role] = role_hits.get(role, 0) + 1
 
-    if not role_hits:
+    if not role_scores:
         return None, 0.0, ""
 
-    best_role = max(role_hits, key=role_hits.get)
-    hit_count = role_hits[best_role]
+    best_role = max(role_scores, key=role_scores.get)
+    best_score = role_scores[best_role]
 
-    # Down-weight VM_GREETING/MENU if human-leaving-voicemail hints are present
+    # Heuristic override: if the segment looks like a human leaving a voicemail
+    # (e.g. "please call me back at..."), prefer HUMAN_AGENT over VM_GREETING/MENU
     if best_role in (ROLE_VM_GREETING, ROLE_VM_MENU):
         if any(p.search(text) for p in _HUMAN_VM_LEAVE_HINTS):
-            return ROLE_HUMAN_AGENT, 0.72, "human leaving voicemail phrase"
+            return ROLE_HUMAN_AGENT, 0.78, "human leaving-voicemail phrase"
 
-    if hit_count >= 2:
-        return best_role, 0.96, f"{hit_count} rule matches"
-    return best_role, 0.82, "1 rule match"
+    if best_score >= 10:
+        conf = 0.96
+    elif best_score >= 5:
+        conf = 0.82
+    elif best_score >= 2:
+        conf = 0.65
+    else:
+        return None, 0.0, ""
+
+    return best_role, conf, f"score={best_score}, hits={role_hits[best_role]}"
 
 
 # ---------------------------------------------------------------------------
@@ -363,31 +388,80 @@ def _derive_topology(classifications: list[SegmentClassification]) -> tuple[str,
 def _channel_fallback(
     segments: list[dict], rule_results: list[SegmentClassification]
 ) -> None:
-    """When the LLM is unavailable and a segment has no rule match, assign role
-    from channel hints: agent channel → HUMAN_AGENT, customer channel → HUMAN_CUSTOMER.
-    This is a last-resort fallback; mutates rule_results in place."""
-    # Determine which channel is most likely AGENT — channel with majority of
-    # HUMAN_AGENT or AUTO_ATTENDANT rule matches (agent intros tend to occur on
-    # one channel; auto-attendants on the other in outbound calls).
+    """Assign roles to UNKNOWN segments via temporal context on the same channel.
+
+    Priority (each segment, in order):
+      1. Nearest preceding rule-classified segment on the same channel
+      2. Nearest following rule-classified segment on the same channel
+      3. Dominant role on the same channel
+      4. Channel-side guess (agent channel → HUMAN_AGENT, other → HUMAN_CUSTOMER)
+
+    This is the critical fallback that makes "Goodbye" (alone, on the automated
+    channel) inherit VOICEMAIL_MENU from its neighbours rather than getting
+    a blind HUMAN_CUSTOMER guess.
+    """
+    # ─── Step 1: per-channel statistics ────────────────────────────────
+    ch_role_counts: dict[int, dict[str, int]] = {0: {}, 1: {}}
     ch_agent_score = {0: 0, 1: 0}
     for i, seg in enumerate(segments):
         ch = seg.get("channel", 0)
-        if rule_results[i].role == ROLE_HUMAN_AGENT:
+        role = rule_results[i].role
+        if role == ROLE_UNKNOWN:
+            continue
+        ch_role_counts[ch][role] = ch_role_counts[ch].get(role, 0) + 1
+        if role == ROLE_HUMAN_AGENT:
             ch_agent_score[ch] += 1
-    agent_ch = max(ch_agent_score, key=ch_agent_score.get)
 
+    ch_dominant: dict[int, str | None] = {}
+    for ch, counts in ch_role_counts.items():
+        ch_dominant[ch] = max(counts, key=counts.get) if counts else None
+
+    agent_ch = max(ch_agent_score, key=ch_agent_score.get) if any(ch_agent_score.values()) else 0
+
+    # ─── Step 2: fill UNKNOWN segments ────────────────────────────────
     for i, seg in enumerate(segments):
         if rule_results[i].role != ROLE_UNKNOWN:
             continue
         ch = seg.get("channel", 0)
+
+        # 2a. nearest preceding rule-classified on same channel
+        inferred: str | None = None
+        for j in range(i - 1, -1, -1):
+            if segments[j].get("channel", 0) == ch and rule_results[j].role != ROLE_UNKNOWN:
+                # Only inherit if neighbour wasn't itself a fallback (high enough conf)
+                if rule_results[j].confidence >= 0.65:
+                    inferred = rule_results[j].role
+                    break
+
+        # 2b. nearest following rule-classified on same channel
+        if inferred is None:
+            for j in range(i + 1, len(segments)):
+                if segments[j].get("channel", 0) == ch and rule_results[j].role != ROLE_UNKNOWN:
+                    if rule_results[j].confidence >= 0.65:
+                        inferred = rule_results[j].role
+                        break
+
+        if inferred:
+            rule_results[i].role = inferred
+            rule_results[i].confidence = 0.65
+            rule_results[i].reason = f"inferred from nearest same-channel neighbour ({inferred})"
+            continue
+
+        # 2c. channel-dominant role
+        if ch_dominant.get(ch):
+            rule_results[i].role = ch_dominant[ch]
+            rule_results[i].confidence = 0.55
+            rule_results[i].reason = f"channel dominant ({ch_dominant[ch]})"
+            continue
+
+        # 2d. last resort — guess from agent/customer channel
         if ch == agent_ch:
             rule_results[i].role = ROLE_HUMAN_AGENT
-            rule_results[i].confidence = 0.55
-            rule_results[i].reason = "channel fallback (no LLM, no rule match)"
+            rule_results[i].reason = "channel guess (agent side)"
         else:
             rule_results[i].role = ROLE_HUMAN_CUSTOMER
-            rule_results[i].confidence = 0.55
-            rule_results[i].reason = "channel fallback (no LLM, no rule match)"
+            rule_results[i].reason = "channel guess (customer side)"
+        rule_results[i].confidence = 0.50
 
 
 def classify_segments(segments: list[dict]) -> ClassificationResult:
