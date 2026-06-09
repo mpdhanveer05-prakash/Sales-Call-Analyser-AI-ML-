@@ -267,8 +267,9 @@ def _llm_classify(
 
     ollama_url = os.getenv("OLLAMA_URL", "http://ollama:11434")
     model = os.getenv("SPEAKER_ROLE_MODEL", os.getenv("OLLAMA_DEFAULT_MODEL", "qwen2.5:14b-instruct"))
-    # Long default — first call after restart needs ~60s for model to load into VRAM
-    timeout = float(os.getenv("SPEAKER_ROLE_TIMEOUT", "600"))
+    # Default 90s — if Ollama is busy/blocked beyond that, fall back to rules
+    # rather than holding up the whole transcription pipeline.
+    timeout = float(os.getenv("SPEAKER_ROLE_TIMEOUT", "90"))
 
     try:
         with httpx.Client(timeout=timeout) as client:
@@ -416,23 +417,25 @@ def classify_segments(segments: list[dict]) -> ClassificationResult:
             reason=reason or "no rule match",
         ))
 
-    # Decide whether to call the LLM. If every segment matches a rule with high
-    # confidence, skip the LLM entirely (saves ~5s per call).
-    low_conf_count = sum(1 for r in rule_results if r.confidence < 0.85)
-    use_llm = low_conf_count > 0 or len(segments) >= 5
+    # Decide whether to call the LLM:
+    #   - USE_LLM_SPEAKER_ROLES=false (default): rules + channel fallback only.
+    #     Fast, deterministic, no Ollama contention with sales scoring.
+    #   - USE_LLM_SPEAKER_ROLES=true: also call LLM to refine ambiguous segments.
+    #     Only fires when there's actually something ambiguous to refine.
+    llm_enabled = os.getenv("USE_LLM_SPEAKER_ROLES", "false").lower() == "true"
+    ambiguous_count = sum(
+        1 for r in rule_results
+        if r.confidence < 0.85 or r.role == ROLE_UNKNOWN
+    )
+    use_llm = llm_enabled and ambiguous_count > 0
 
     final: list[SegmentClassification]
     topology = TOPOLOGY_UNKNOWN
     topology_conf = 0.5
 
     if use_llm:
-        # Stage B: LLM refinement
+        # Stage B: LLM refinement (opt-in via USE_LLM_SPEAKER_ROLES=true)
         llm_raw = _llm_classify(segments, rule_results)
-        # If LLM didn't return useful results (timeout, parse fail, empty),
-        # apply channel-based fallback so we don't ship UNKNOWN labels downstream.
-        if not llm_raw.get("segments"):
-            logger.info("LLM unavailable — applying channel-based fallback for UNKNOWN segments")
-            _channel_fallback(segments, rule_results)
         llm_by_idx: dict[int, dict] = {}
         for s in llm_raw.get("segments", []) or []:
             try:
@@ -492,7 +495,8 @@ def classify_segments(segments: list[dict]) -> ClassificationResult:
             ))
         final = merged
     else:
-        # All segments confidently classified by rules alone
+        # No LLM — rules + channel fallback for UNKNOWN segments
+        _channel_fallback(segments, rule_results)
         final = rule_results
 
     # Stage C: temporal smoothing
