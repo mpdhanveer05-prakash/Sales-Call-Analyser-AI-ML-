@@ -163,23 +163,41 @@ def _call_ollama(prompt: str, system: str, max_retries: int = 3, num_predict: in
         "stream": False,
         "options": {"temperature": 0.1, "num_predict": num_predict, "seed": 42},
     }
+    # Cap per-attempt wait so a stuck Ollama doesn't block the celery worker for
+    # 15+ minutes. Three attempts × 180s = 9 min worst-case instead of 45.
+    per_attempt_timeout = min(float(settings.ollama_timeout_seconds), 180.0)
     last_exc: Exception = RuntimeError("No attempts made")
     for attempt in range(max_retries):
+        attempt_start = time.monotonic()
         try:
-            with httpx.Client(timeout=float(settings.ollama_timeout_seconds)) as client:
+            with httpx.Client(timeout=per_attempt_timeout) as client:
                 resp = client.post(f"{settings.ollama_url}/api/generate", json=payload)
                 resp.raise_for_status()
-            return _extract_json(resp.json().get("response", ""))
+            elapsed = time.monotonic() - attempt_start
+            data = resp.json()
+            eval_count = data.get("eval_count", 0)
+            tok_per_sec = (eval_count / elapsed) if elapsed > 0 else 0
+            logger.info(
+                "Ollama %s: %d tokens in %.1fs (%.1f tok/s)",
+                settings.ollama_default_model, eval_count, elapsed, tok_per_sec,
+            )
+            return _extract_json(data.get("response", ""))
         except (httpx.TimeoutException, httpx.ConnectError) as exc:
             last_exc = exc
-            wait = 15 * (attempt + 1)
-            logger.warning("Ollama error (attempt %d/%d): %s — retrying in %ds", attempt + 1, max_retries, exc, wait)
+            wait = 5 * (attempt + 1)
+            logger.warning(
+                "Ollama error (attempt %d/%d after %.1fs): %s — retrying in %ds",
+                attempt + 1, max_retries, time.monotonic() - attempt_start, exc, wait,
+            )
             time.sleep(wait)
         except ValueError as exc:
             last_exc = exc
-            logger.warning("JSON parse failed (attempt %d/%d): %s", attempt + 1, max_retries, exc)
+            logger.warning(
+                "JSON parse failed (attempt %d/%d after %.1fs): %s",
+                attempt + 1, max_retries, time.monotonic() - attempt_start, exc,
+            )
             if attempt < max_retries - 1:
-                time.sleep(5)
+                time.sleep(2)
     raise RuntimeError(f"Ollama failed after {max_retries} attempts: {last_exc}")
 
 
@@ -600,9 +618,10 @@ def analyze_call_summary(segments: list[dict], call_type: str = "LIVE") -> dict:
     else:
         duration_ms = max((s["end_ms"] for s in segments), default=0) if segments else 0
         duration_s = duration_ms // 1000
-        if duration_s < 90:
-            # Short call — use minimal prompt, no sentiment or objection analysis
-            logger.info("Short call (%ds) — using stripped-down LLM prompt (~250 tokens)", duration_s)
+        # Short/medium call (< 3 min) — use minimal prompt without sentiment
+        # timeline or full objection extraction. 3× faster on T4 (~6s vs ~20s).
+        if duration_s < 180:
+            logger.info("Call %ds (< 3 min) — using stripped-down LLM prompt (~250 tokens)", duration_s)
             prompt = _SHORT_CALL_PROMPT.format(
                 duration_s=duration_s,
                 transcript=transcript,
@@ -615,7 +634,7 @@ def analyze_call_summary(segments: list[dict], call_type: str = "LIVE") -> dict:
                 transcript=transcript,
                 codes="\n".join(DISPOSITION_CODES),
             )
-            max_tokens = 800
+            max_tokens = 600
 
     try:
         raw = _call_llm(prompt, _SUMMARY_ONLY_SYSTEM, max_tokens=max_tokens)

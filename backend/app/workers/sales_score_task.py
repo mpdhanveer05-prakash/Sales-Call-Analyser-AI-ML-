@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -225,8 +226,10 @@ def sales_score_task(self, call_id: str) -> dict:
             sales_result = signal_scoring.compute_scores(segments, rubric)
 
         # Fix 2 + 4: LLM handles narrative only (summary, disposition, coaching, sentiment)
+        llm_start = time.monotonic()
         logger.info("Running LLM summary analysis for call %s (call_type=%s)", call_id, call_type)
         llm_result = ollama_service.analyze_call_summary(segments, call_type=call_type)
+        logger.info("LLM summary done for call %s in %.1fs", call_id, time.monotonic() - llm_start)
 
         summary_result = llm_result["summary"]
         disposition_result = llm_result["disposition"]
