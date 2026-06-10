@@ -277,6 +277,8 @@ async def get_call_transcript(
             TranscriptSegmentOut(
                 id=s.id,
                 speaker=s.speaker,
+                role=s.role or "UNKNOWN",
+                role_confidence=float(s.role_confidence) if s.role_confidence is not None else None,
                 start_ms=s.start_ms,
                 end_ms=s.end_ms,
                 text=s.text,

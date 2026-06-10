@@ -4,6 +4,7 @@ import { useDropzone, type FileRejection } from "react-dropzone";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { useQueryClient } from "@tanstack/react-query";
 import { UploadCloud, FileAudio, X, CheckCircle, Loader2, AlertCircle } from "lucide-react";
 import { uploadCall } from "@/api/calls";
 import { useAgents } from "@/hooks/useAgents";
@@ -27,6 +28,7 @@ function formatBytes(bytes: number) {
 
 export default function UploadPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const { data: agents = [], isLoading: agentsLoading } = useAgents();
 
@@ -97,6 +99,9 @@ export default function UploadPage() {
 
       const result = await uploadCall(formData);
       setUploadedCallId(result.id);
+      // Invalidate the calls list cache so the new call appears immediately
+      // when the user navigates to /calls (no manual refresh needed).
+      queryClient.invalidateQueries({ queryKey: ["calls"] });
       setUploadProgress("success");
     } catch {
       setUploadProgress("error");
@@ -116,7 +121,10 @@ export default function UploadPage() {
         <p className="text-sm text-gray-500 mb-6">Processing has started. The call will appear in your calls list.</p>
         <div className="flex gap-3 justify-center">
           <button
-            onClick={() => navigate("/calls")}
+            onClick={() => {
+              queryClient.invalidateQueries({ queryKey: ["calls"] });
+              navigate("/calls");
+            }}
             className="px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-700 transition-colors"
           >
             View calls list
