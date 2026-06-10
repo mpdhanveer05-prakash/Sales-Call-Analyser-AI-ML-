@@ -74,7 +74,12 @@ _RULES_WEIGHTED: list[tuple[str, re.Pattern, int]] = [
     (ROLE_VM_MENU, re.compile(r"\bto\s+continue\s+holding\b", re.I), 5),
 
     # ── Voicemail greeting (the answering machine speaking) ──
-    (ROLE_VM_GREETING, re.compile(r"\bperson\s+you(?:\s+are|'re)\s+trying\s+to\s+reach\b", re.I), 6),
+    # Tight match: "person you are trying to reach IS (currently/not) (unavailable/available)"
+    # — the bare phrase can appear in auto-attendant dial-by-name prompts too.
+    (ROLE_VM_GREETING, re.compile(r"\bperson\s+you(?:\s+are|'re)\s+trying\s+to\s+reach\s+is\s+(?:currently\s+)?(?:un)?available\b", re.I), 7),
+    (ROLE_VM_GREETING, re.compile(r"\bperson\s+you(?:\s+are|'re)\s+trying\s+to\s+reach\s+is\s+not\s+available\b", re.I), 7),
+    # Bare phrase — weak signal, frequently appears in directory prompts
+    (ROLE_VM_GREETING, re.compile(r"\bperson\s+you(?:\s+are|'re)\s+trying\s+to\s+reach\b", re.I), 2),
     (ROLE_VM_GREETING, re.compile(r"\bcurrently\s+(?:unavailable|not\s+available)\b", re.I), 6),
     (ROLE_VM_GREETING, re.compile(r"\bafter\s+(?:the\s+)?(?:tone|beep)\b", re.I), 6),
     (ROLE_VM_GREETING, re.compile(r"\bat\s+the\s+(?:tone|beep)\b", re.I), 6),
