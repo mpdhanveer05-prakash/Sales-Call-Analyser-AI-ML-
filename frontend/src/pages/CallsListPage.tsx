@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { format } from "date-fns";
-import { RefreshCw, Upload, Search, XCircle, Trash2, AlertTriangle, Play, Pause } from "lucide-react";
+import { RefreshCw, Upload, Search, XCircle, Trash2, AlertTriangle } from "lucide-react";
 import { useCalls } from "@/hooks/useCalls";
 import { useAgents } from "@/hooks/useAgents";
 import { StatusBadge } from "@/components/ui/badge";
@@ -150,85 +150,6 @@ export default function CallsListPage() {
     }
   }
 
-  // ─── Auto-scroll the table horizontally (kiosk-style reveal) ───────────────
-  // Left → right at 30 px/sec, 2s pause at right edge, smooth scroll back at
-  // 80 px/sec, 1s pause at left edge, repeat forever. Pauses when the user
-  // hovers (so they can read or click) or scrolls manually.
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
-
-  useEffect(() => {
-    const container = scrollRef.current;
-    if (!container || !autoScrollEnabled || calls.length === 0) return;
-
-    const FORWARD_SPEED_PX_PER_SEC = 30;
-    const BACKWARD_SPEED_PX_PER_SEC = 80;
-    const PAUSE_RIGHT_MS = 2000;
-    const PAUSE_LEFT_MS = 1000;
-
-    let rafId = 0;
-    let virtualElapsed = 0;
-    let lastTick = performance.now();
-    let paused = false;
-    let userScrolling = false;
-    let userScrollTimer: number | undefined;
-
-    const onMouseEnter = () => { paused = true; };
-    const onMouseLeave = () => { paused = false; };
-    const onWheel = () => {
-      userScrolling = true;
-      window.clearTimeout(userScrollTimer);
-      userScrollTimer = window.setTimeout(() => { userScrolling = false; }, 3000);
-    };
-
-    container.addEventListener("mouseenter", onMouseEnter);
-    container.addEventListener("mouseleave", onMouseLeave);
-    container.addEventListener("wheel", onWheel, { passive: true });
-    container.addEventListener("touchstart", onWheel, { passive: true });
-
-    const animate = (now: number) => {
-      const delta = now - lastTick;
-      lastTick = now;
-
-      if (!paused && !userScrolling) {
-        virtualElapsed += delta;
-
-        const maxScroll = container.scrollWidth - container.clientWidth;
-        if (maxScroll > 0) {
-          const forwardMs = (maxScroll / FORWARD_SPEED_PX_PER_SEC) * 1000;
-          const backwardMs = (maxScroll / BACKWARD_SPEED_PX_PER_SEC) * 1000;
-          const cycleMs = forwardMs + PAUSE_RIGHT_MS + backwardMs + PAUSE_LEFT_MS;
-          const t = virtualElapsed % cycleMs;
-
-          let target: number;
-          if (t < forwardMs) {
-            target = (t / forwardMs) * maxScroll;
-          } else if (t < forwardMs + PAUSE_RIGHT_MS) {
-            target = maxScroll;
-          } else if (t < forwardMs + PAUSE_RIGHT_MS + backwardMs) {
-            const bt = t - forwardMs - PAUSE_RIGHT_MS;
-            target = maxScroll - (bt / backwardMs) * maxScroll;
-          } else {
-            target = 0;
-          }
-          container.scrollLeft = target;
-        }
-      }
-      rafId = requestAnimationFrame(animate);
-    };
-
-    rafId = requestAnimationFrame(animate);
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      window.clearTimeout(userScrollTimer);
-      container.removeEventListener("mouseenter", onMouseEnter);
-      container.removeEventListener("mouseleave", onMouseLeave);
-      container.removeEventListener("wheel", onWheel);
-      container.removeEventListener("touchstart", onWheel);
-    };
-  }, [autoScrollEnabled, calls.length]);
-
   return (
     <div className="p-8">
       {/* Header */}
@@ -238,14 +159,6 @@ export default function CallsListPage() {
           <p className="text-sm text-gray-500 mt-0.5">{total} total call{total !== 1 ? "s" : ""}</p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setAutoScrollEnabled((v) => !v)}
-            title={autoScrollEnabled ? "Pause auto-scroll" : "Resume auto-scroll"}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-          >
-            {autoScrollEnabled ? <Pause size={14} /> : <Play size={14} />}
-            {autoScrollEnabled ? "Pause scroll" : "Auto-scroll"}
-          </button>
           <button
             onClick={() => refetch()}
             disabled={isFetching}
@@ -333,12 +246,8 @@ export default function CallsListPage() {
         </div>
       )}
 
-      {/* Table */}
-      <div
-        ref={scrollRef}
-        className="bg-white rounded-xl border border-gray-200 overflow-x-auto"
-        style={{ scrollBehavior: "auto" }}
-      >
+      {/* Table — horizontally scrollable when columns exceed viewport width */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
         {isLoading ? (
           <div className="flex items-center justify-center py-20 text-gray-400">
             <RefreshCw size={20} className="animate-spin mr-2" /> Loading calls…
